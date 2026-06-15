@@ -5,4 +5,3 @@ library sleek_http_client;
 export 'src/sleek_http_client.dart';
 export 'src/exceptions.dart';
 export 'src/types.dart';
-

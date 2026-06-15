@@ -173,8 +173,7 @@ class SleekHttpClient {
   // ---------------------------------------------------------------------------
 
   /// Returns `true` for any 2xx HTTP status code.
-  static bool isStatusCodeSuccess(int httpStatusCode) =>
-      httpStatusCode >= 200 && httpStatusCode < 300;
+  static bool isStatusCodeSuccess(int httpStatusCode) => httpStatusCode >= 200 && httpStatusCode < 300;
 
   /// Throws a [ConnectivityException] with
   /// [ConnectivityExceptionType.noInternet] when the device is offline.
@@ -229,15 +228,10 @@ class SleekHttpClient {
       }
 
       if (e is HttpResponseException && e.statusCode == 401) {
-        final canRefresh =
-            enableAutoRetryOnUnauthorized &&
-            refreshAuthorizationTokens != null &&
-            (refreshAuthorizationTokensEndpoint == null ||
-                !request.url.path.contains(
-                  refreshAuthorizationTokensEndpoint!,
-                ));
-
-        if (canRefresh) {
+        // If auto-retry on unauthorized is enabled AND refresh logic is configured AND current request is NOT the refresh token request, start refresh logic
+        if (enableAutoRetryOnUnauthorized
+            && refreshAuthorizationTokens != null
+            && (refreshAuthorizationTokensEndpoint == null || !request.url.path.contains(refreshAuthorizationTokensEndpoint!))) {
           try {
             await _askRefreshAuthorizationTokens();
           } catch (_) {
@@ -317,10 +311,7 @@ class SleekHttpClient {
           body = responseHandler.bodyString.removeAllNewLines();
         } else {
           final sizeKb = ((r.contentLength ?? 0) / 1024).round();
-          body =
-              sizeKb <= 10
-                  ? responseHandler.bodyString.removeAllNewLines()
-                  : '$sizeKb kb';
+          body = sizeKb <= 10 ? responseHandler.bodyString.removeAllNewLines() : '$sizeKb kb';
         }
       }
       if (cfg.logHeaders) headers = r.headers.toString();
@@ -330,17 +321,12 @@ class SleekHttpClient {
         http.Request() => request.body,
         http.MultipartRequest() => 'Multipart${json.encode({
           'fields': request.fields,
-          'files':
-              request.files
-                  .map(
-                    (f) => {
-                      'field': f.field,
-                      'filename': f.filename,
-                      'length': f.length,
-                      'contentType': f.contentType.toString(),
-                    },
-                  )
-                  .toList(),
+          'files': request.files.map((f) => {
+            'field': f.field,
+            'filename': f.filename,
+            'length': f.length,
+            'contentType': f.contentType.toString(),
+          }).toList(),
         })}',
         _ => '',
       };
@@ -399,8 +385,7 @@ class MultipartRequestFileData {
     required this.path,
     String? contentType,
     this.filename,
-  }) : contentType =
-           contentType != null ? http.MediaType.parse(contentType) : null;
+  }) : contentType = contentType != null ? http.MediaType.parse(contentType) : null;
 
   /// The form-field name.
   final String fieldName;
@@ -429,12 +414,10 @@ class BytesBody {
 
 class _ResponseHandler {
   _ResponseHandler(this.response)
-    : isSuccess = SleekHttpClient.isStatusCodeSuccess(response.statusCode),
-      isBodyJson =
-          ContentType.parse(
-                response.headers[HttpHeaders.contentTypeHeader] ?? '',
-              ).mimeType ==
-              SleekHttpClient.contentTypeJsonMimeType;
+      : isSuccess = SleekHttpClient.isStatusCodeSuccess(response.statusCode),
+        isBodyJson = ContentType.parse(
+          response.headers[HttpHeaders.contentTypeHeader] ?? '',
+        ).mimeType == SleekHttpClient.contentTypeJsonMimeType;
 
   final http.Response response;
 
@@ -442,6 +425,7 @@ class _ResponseHandler {
   final bool isBodyJson;
 
   String? _bodyString;
+
   String get bodyString => _bodyString ??= response.body;
 
   T bodyJson<T>() => json.decode(bodyString) as T;
@@ -460,8 +444,7 @@ class _ResponseHandler {
       if (T == JsonObject || T == JsonList) return bodyJsonOrNull<T>();
       if (T == BytesBody) {
         return BytesBody._(
-          response.headers[HttpHeaders.contentTypeHeader] ??
-              'application/octet-stream',
+          response.headers[HttpHeaders.contentTypeHeader] ?? 'application/octet-stream',
           response.bodyBytes,
         ) as T;
       }
@@ -470,8 +453,7 @@ class _ResponseHandler {
     } else {
       JsonObject? parsed;
       if (isBodyJson) parsed = bodyJsonOrNull<JsonObject>();
-      throw errorBuilder?.call(response, parsed) ??
-          HttpResponseException(response, parsed);
+      throw errorBuilder?.call(response, parsed) ?? HttpResponseException(response, parsed);
     }
   }
 }
