@@ -1,7 +1,8 @@
 name: sleek_http_client
 description: A sleek, pure-Dart HTTP client with connectivity checking, token refresh, multipart support, and structured logging.
 version: 0.1.0
-homepage: https://github.com/Nicolas/sleek_http_client
+repository: https://github.com/IcySunStudio/sleek_http_client
+issue_tracker: https://github.com/IcySunStudio/sleek_http_client/issues
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -12,4 +13,4 @@ dependencies:
 
 dev_dependencies:
   lints: ^6.1.0
-  test: ^1.25.0
+  test: ^1.31.1
