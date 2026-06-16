@@ -6,6 +6,7 @@
 // connectivity_plus is automatically stubbed out in non-Flutter environments
 // via conditional imports — no isOnlineChecker override needed.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -19,9 +20,9 @@ Future<void> main() async {
   _banner('sleek_http_client — example & smoke test');
   _print('API → https://jsonplaceholder.typicode.com\n');
 
-  await _scenario1RetryAfter401();
+  await _scenario1CleanRequest();
   await _scenario2ExcludedPathNoRetry();
-  await _scenario3CleanRequest();
+  await _scenario3RetryAfter401WithConcurrentRequests();
 
   _print('\nDone.');
 }
@@ -30,45 +31,23 @@ Future<void> main() async {
 // Scenarios
 // =============================================================================
 
-/// Scenario 1 — Normal protected endpoint.
+/// Scenario 1 — Clean request, no auth, no retry.
 ///
 /// Flow:
-///   GET /posts/1
-///     └─ interceptor returns fake 401
-///     └─ TokenRefreshHandler.shouldRetry → true (not excluded)
-///     └─ TokenRefreshHandler.onBeforeRetry → refresh callback runs
-///     └─ retry: GET /posts/1 (real network) → 200
-///     └─ post title printed
-Future<void> _scenario1RetryAfter401() async {
-  _header('Scenario 1 — 401 → refresh → retry → 200');
-
-  var refreshCallCount = 0;
-
-  // The interceptor fires once on /posts, then lets the retry through.
-  final interceptor = _Interceptor401Client(interceptPaths: {'/posts'});
-
-  final tokenHandler = TokenRefreshHandler(
-    () async {
-      refreshCallCount++;
-      _print('  🔄 Token refresh called (#$refreshCallCount)');
-      // Real app: call /auth/refresh here and store the new tokens.
-    },
-    // /auth/refresh would normally be here; nothing real to exclude in this demo.
-    excludedPaths: ['/auth/refresh'],
-  );
+///   GET /users/1
+///     └─ no interception — real network only
+///     └─ 200 → user name printed
+Future<void> _scenario1CleanRequest() async {
+  _header('Scenario 1 — clean request → 200 directly');
 
   final client = SleekHttpClient(
-    client: interceptor,
     authorityGetter: () => 'jsonplaceholder.typicode.com',
-    shouldRetry: tokenHandler.shouldRetry,
-    onBeforeRetry: tokenHandler.onBeforeRetry,
     logConfig: HttpClientLogConfig(logger: (msg) => _print('  $msg')),
   );
 
   try {
-    final post = await client.send<JsonObject>(HttpMethod.get, '/posts/1');
-    _pass('Got post: "${post?['title']}"');
-    _assert(refreshCallCount == 1, 'refresh was called exactly once', refreshCallCount);
+    final user = await client.send<JsonObject>(HttpMethod.get, '/users/1');
+    _pass('Got user: "${user?['name']}" <${user?['email']}>');
   } on HttpResponseException catch (e) {
     _fail('Unexpected HTTP error: $e');
   }
@@ -86,7 +65,6 @@ Future<void> _scenario2ExcludedPathNoRetry() async {
   _header('Scenario 2 — 401 on excluded path → error surfaced, no refresh');
 
   var refreshCallCount = 0;
-
   final interceptor = _Interceptor401Client(interceptPaths: {'/todos'});
 
   final tokenHandler = TokenRefreshHandler(
@@ -104,6 +82,7 @@ Future<void> _scenario2ExcludedPathNoRetry() async {
     authorityGetter: () => 'jsonplaceholder.typicode.com',
     shouldRetry: tokenHandler.shouldRetry,
     onBeforeRetry: tokenHandler.onBeforeRetry,
+    beforeSend: tokenHandler.beforeSend,
     logConfig: HttpClientLogConfig(logger: (msg) => _print('  $msg')),
   );
 
@@ -116,27 +95,79 @@ Future<void> _scenario2ExcludedPathNoRetry() async {
   }
 }
 
-/// Scenario 3 — Clean request, no interception.
+/// Scenario 3 — 401 triggers refresh; concurrent requests are paused by
+/// [TokenRefreshHandler.beforeSend] and never hit the server with a stale token.
 ///
 /// Flow:
-///   GET /users/1
-///     └─ no interception — real network only
-///     └─ 200 → user name printed
-Future<void> _scenario3CleanRequest() async {
-  _header('Scenario 3 — clean request → 200 directly');
+///   GET /posts/1  (request A)
+///     └─ interceptor returns fake 401
+///     └─ shouldRetry → true → refresh starts (artificial 150 ms delay)
+///
+///   [while refresh is running]
+///   GET /posts/2  (request B)  ─┐
+///   GET /posts/3  (request C)  ─┴─ beforeSend pauses both until refresh done
+///
+///   refresh completes → A, B, C all succeed with the fresh token
+///   interceptor injects exactly 1 × 401 (only A)
+Future<void> _scenario3RetryAfter401WithConcurrentRequests() async {
+  _header('Scenario 3 — 401 → refresh → retry + concurrent requests paused by beforeSend');
+
+  var refreshCallCount = 0;
+  var interceptorFireCount = 0;
+
+  // Completer lets us know the moment the refresh callback has started,
+  // so we can fire B and C while the refresh is still in progress.
+  final refreshStarted = Completer<void>();
+
+  final interceptor = _Interceptor401Client(
+    interceptPaths: {'/posts'},
+    onIntercept: () => interceptorFireCount++,
+  );
+
+  final tokenHandler = TokenRefreshHandler(
+    () async {
+      refreshCallCount++;
+      _print('  🔄 Token refresh started (#$refreshCallCount)');
+      refreshStarted.complete();
+      // Simulate a slow network call to the refresh endpoint.
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      _print('  ✔️  Token refresh done');
+    },
+    excludedPaths: ['/auth/refresh'],
+  );
 
   final client = SleekHttpClient(
-    // No custom http.Client → uses the default http.Client (real network).
+    client: interceptor,
     authorityGetter: () => 'jsonplaceholder.typicode.com',
+    shouldRetry: tokenHandler.shouldRetry,
+    onBeforeRetry: tokenHandler.onBeforeRetry,
+    // Key: new requests started while the refresh is running will pause here
+    // instead of being dispatched with the stale token.
+    beforeSend: tokenHandler.beforeSend,
     logConfig: HttpClientLogConfig(logger: (msg) => _print('  $msg')),
   );
 
-  try {
-    final user = await client.send<JsonObject>(HttpMethod.get, '/users/1');
-    _pass('Got user: "${user?['name']}" <${user?['email']}>');
-  } on HttpResponseException catch (e) {
-    _fail('Unexpected HTTP error: $e');
-  }
+  // Request A — will hit the fake 401 and trigger the refresh.
+  final futureA = client.send<JsonObject>(HttpMethod.get, '/posts/1');
+
+  // Wait until the refresh callback has started, then fire B and C.
+  // Without beforeSend they would be sent immediately with the stale token
+  // and each get their own 401. With beforeSend they pause silently.
+  await refreshStarted.future;
+  _print('  [test] refresh is running — firing B and C now');
+  final futureB = client.send<JsonObject>(HttpMethod.get, '/posts/2');
+  final futureC = client.send<JsonObject>(HttpMethod.get, '/posts/3');
+  // This line executes synchronously before any async work — B and C are now
+  // queued but their beforeSend is blocking them from being dispatched yet.
+  _print('  [test] B and C are paused by beforeSend, waiting for refresh…');
+
+  final results = await Future.wait([futureA, futureB, futureC]);
+
+  _pass('A: "${_truncate(results[0]?['title'])}"');
+  _pass('B: "${_truncate(results[1]?['title'])}"');
+  _pass('C: "${_truncate(results[2]?['title'])}"');
+  _assert(refreshCallCount == 1, 'refresh was called exactly once', refreshCallCount);
+  _assert(interceptorFireCount == 1, 'interceptor fired exactly once (only A got a 401)', interceptorFireCount);
 }
 
 // =============================================================================
@@ -151,10 +182,16 @@ Future<void> _scenario3CleanRequest() async {
 /// the real network via the inner [http.Client]. This simulates an expired
 /// token without mocking the entire network stack.
 class _Interceptor401Client extends http.BaseClient {
-  _Interceptor401Client({required this.interceptPaths}) : _inner = http.Client();
+  _Interceptor401Client({
+    required this.interceptPaths,
+    this.onIntercept,
+  }) : _inner = http.Client();
 
   /// URL path substrings that will be intercepted once.
   final Set<String> interceptPaths;
+
+  /// Called each time a 401 is injected (useful for counting in tests).
+  final void Function()? onIntercept;
 
   final http.Client _inner;
 
@@ -165,15 +202,13 @@ class _Interceptor401Client extends http.BaseClient {
   Future<http.StreamedResponse> send(http.BaseRequest request) {
     final path = request.url.path;
 
-    // Find a matching path that hasn't been intercepted yet.
     final matchedPath = interceptPaths
         .where((p) => path.contains(p) && !_alreadyIntercepted.contains(p))
         .firstOrNull;
 
     if (matchedPath != null) {
-      // Mark it so the retry (or any later call) goes through for real.
       _alreadyIntercepted.add(matchedPath);
-
+      onIntercept?.call();
       _print('  [Interceptor] ⚡ Injecting 401 for $path');
 
       return Future.value(
@@ -186,7 +221,6 @@ class _Interceptor401Client extends http.BaseClient {
       );
     }
 
-    // Not intercepted (or already fired once) → real network.
     return _inner.send(request);
   }
 
@@ -208,9 +242,7 @@ void _banner(String text) {
   _print(line);
 }
 
-void _header(String text) {
-  _print('\n┌─ $text');
-}
+void _header(String text) => _print('\n┌─ $text');
 
 void _pass(String text) => _print('│  ✅  $text');
 void _fail(String text) => _print('│  ❌  $text');
@@ -225,11 +257,8 @@ void _assert(bool condition, String description, Object actual) {
 
 void _print(String text) => print(text); // ignore: avoid_print
 
-
-
-
-
-
-
-
+String _truncate(Object? value, [int max = 40]) {
+  final s = value?.toString() ?? '';
+  return s.length <= max ? s : '${s.substring(0, max)}…';
+}
 
