@@ -7,9 +7,11 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:http/http.dart' as http;
 
 import 'exceptions.dart';
+import 'retry_handlers.dart';
 import 'types.dart';
 
 export 'exceptions.dart';
+export 'retry_handlers.dart';
 export 'types.dart';
 
 /// A clean, feature-rich HTTP client for Dart.
@@ -28,12 +30,18 @@ class SleekHttpClient {
     this.basePath = '',
     this.headersGetter,
     this.authorizationHeaderGetter,
-    this.refreshAuthorizationTokensEndpoint,
-    this.refreshAuthorizationTokens,
+    this.shouldRetry,
+    this.onBeforeRetry,
     this.timeOutDuration = const Duration(seconds: 30),
     this.errorBuilder,
     this.logConfig,
-  }) : _client = client ?? http.Client();
+  })  : _client = client ?? http.Client(),
+        assert(
+          onBeforeRetry == null || shouldRetry != null,
+          'onBeforeRetry is set but shouldRetry is null — '
+          'onBeforeRetry will never be called. '
+          'Provide a shouldRetry callback, or use TokenRefreshHandler.',
+        );
 
   /// JSON MIME type constant.
   static const contentTypeJsonMimeType = 'application/json';
@@ -57,15 +65,22 @@ class SleekHttpClient {
   /// When `null`, no `Authorization` header is added.
   final String? Function()? authorizationHeaderGetter;
 
-  /// Path of the refresh-token endpoint.
+  /// Called after a failed request to decide whether to retry it.
   ///
-  /// Requests to this path are never retried on a 401, preventing infinite
-  /// refresh loops.
-  final String? refreshAuthorizationTokensEndpoint;
+  /// Return `true` to trigger [onBeforeRetry] (if any) and resend the request.
+  /// Return `false` (or leave `null`) to surface the error as-is.
+  ///
+  /// See [TokenRefreshHandler.shouldRetry] for a ready-made 401-based implementation.
+  final Future<bool> Function(HttpResponseException exception)? shouldRetry;
 
-  /// Callback that refreshes auth tokens. Must throw if the refresh fails.
-  /// When `null`, no automatic token refresh is attempted.
-  final Future<void> Function()? refreshAuthorizationTokens;
+  /// Called before the request is retried, after [shouldRetry] returned `true`.
+  ///
+  /// Use this to refresh tokens, insert delays, or perform any side-effect
+  /// needed before the retry. Must throw if the pre-retry action fails, in
+  /// which case the original exception is re-thrown to the caller.
+  ///
+  /// See [TokenRefreshHandler.onBeforeRetry] for a de-duplicated token-refresh implementation.
+  final Future<void> Function(HttpResponseException exception)? onBeforeRetry;
 
   /// How long to wait for a response before throwing a
   /// [ConnectivityException] with [ConnectivityExceptionType.timeout].
@@ -215,7 +230,7 @@ class SleekHttpClient {
 
   Future<T?> _sendHandledRequest<T>(
     http.BaseRequest request, {
-    bool enableAutoRetryOnUnauthorized = true,
+    bool retryEnabled = true,
   }) async {
     // Attach auth header here so it uses the most recent token on every retry.
     request.headers.addAll(_buildAuthHeader());
@@ -227,21 +242,18 @@ class SleekHttpClient {
         throw const ConnectivityException(ConnectivityExceptionType.timeout);
       }
 
-      if (e is HttpResponseException && e.statusCode == 401) {
-        // If auto-retry on unauthorized is enabled AND refresh logic is configured AND current request is NOT the refresh token request, start refresh logic
-        if (enableAutoRetryOnUnauthorized
-            && refreshAuthorizationTokens != null
-            && (refreshAuthorizationTokensEndpoint == null || !request.url.path.contains(refreshAuthorizationTokensEndpoint!))) {
+      if (e is HttpResponseException && retryEnabled && shouldRetry != null) {
+        if (await shouldRetry!(e)) {
           try {
-            await _askRefreshAuthorizationTokens();
+            await onBeforeRetry?.call(e);
           } catch (_) {
-            // Refresh failed — surface the original 401.
+            // Pre-retry action failed — surface the original error.
             rethrow;
           }
 
           return _sendHandledRequest<T>(
             await request.copyAsNew(),
-            enableAutoRetryOnUnauthorized: false,
+            retryEnabled: false,
           );
         }
       }
@@ -264,23 +276,6 @@ class SleekHttpClient {
     return handler.parseAs<T>(errorBuilder: errorBuilder);
   }
 
-  // ---------------------------------------------------------------------------
-  // Private – token refresh (de-duplicated)
-  // ---------------------------------------------------------------------------
-
-  Future<void>? _refreshTask;
-
-  Future<void> _askRefreshAuthorizationTokens() async {
-    if (_refreshTask != null) {
-      return _refreshTask;
-    }
-    _refreshTask = refreshAuthorizationTokens!();
-    try {
-      await _refreshTask;
-    } finally {
-      _refreshTask = null;
-    }
-  }
 
   // ---------------------------------------------------------------------------
   // Private – logging
