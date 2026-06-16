@@ -242,15 +242,14 @@ class SleekHttpClient {
         throw const ConnectivityException(ConnectivityExceptionType.timeout);
       }
 
+      // Check retry is possible
       if (e is HttpResponseException && retryEnabled && shouldRetry != null) {
+        // Check if we should retry
         if (await shouldRetry!(e)) {
-          try {
-            await onBeforeRetry?.call(e);
-          } catch (_) {
-            // Pre-retry action failed — surface the original error.
-            rethrow;
-          }
+          // Call pre-retry task before retrying. May throw.
+          await onBeforeRetry?.call(e);
 
+          // Retry the request with a fresh copy
           return _sendHandledRequest<T>(
             await request.copyAsNew(),
             retryEnabled: false,

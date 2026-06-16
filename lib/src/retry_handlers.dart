@@ -23,7 +23,7 @@ class TokenRefreshHandler {
   Future<void>? _task;
 
   /// Returns `true` when [exception] carries a 401 Unauthorized status code.
-  Future<bool> shouldRetry(HttpResponseException exception) async => exception.statusCode == 401;
+  Future<bool> shouldRetry(HttpResponseException exception) => Future.value(exception.statusCode == 401);
 
   /// Executes the token refresh before the request is retried.
   ///
