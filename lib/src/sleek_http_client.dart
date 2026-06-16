@@ -31,21 +31,13 @@ class SleekHttpClient {
     this.basePath = '',
     this.headersGetter,
     this.authorizationHeaderGetter,
-    this.beforeSend,
-    this.shouldRetry,
-    this.onBeforeRetry,
+    this.retryPolicy,
     this.timeOutDuration = const Duration(seconds: 30),
     this.errorBuilder,
     this.logConfig,
     Future<bool> Function()? isOnlineChecker,
   })  : _isOnlineChecker = isOnlineChecker,
-        _client = client ?? http.Client(),
-        assert(
-          onBeforeRetry == null || shouldRetry != null,
-          'onBeforeRetry is set but shouldRetry is null — '
-          'onBeforeRetry will never be called. '
-          'Provide a shouldRetry callback, or use TokenRefreshHandler.',
-        );
+        _client = client ?? http.Client();
 
   /// JSON MIME type constant.
   static const contentTypeJsonMimeType = 'application/json';
@@ -73,36 +65,16 @@ class SleekHttpClient {
   /// When `null`, no `Authorization` header is added.
   final String? Function()? authorizationHeaderGetter;
 
-  /// Called before every request is sent, giving an opportunity to pause
-  /// before the request is dispatched.
+  /// Pluggable retry and pre-send pause logic.
   ///
-  /// If a token refresh is in progress, requests started during that window
-  /// would otherwise be sent with the stale token, receive a 401, and only
-  /// then join the retry queue. Providing [TokenRefreshHandler.beforeSend]
-  /// here pauses those requests silently until the refresh completes, so they
-  /// are never sent with a bad token in the first place.
+  /// - Pass a [TokenRefreshHandler] for the standard JWT / OAuth token-refresh
+  ///   pattern (401 retry with de-duplicated refresh and pre-send pause).
+  /// - Pass an [HttpRetryPolicyBuilder] to configure individual hooks without
+  ///   writing a full class.
+  /// - Implement [HttpRetryPolicy] directly for full custom control.
   ///
-  /// Returns immediately when nothing is pending.
-  ///
-  /// See [TokenRefreshHandler.beforeSend].
-  final Future<void> Function()? beforeSend;
-
-  /// Called after a failed request to decide whether to retry it.
-  ///
-  /// Return `true` to trigger [onBeforeRetry] (if any) and resend the request.
-  /// Return `false` (or leave `null`) to surface the error as-is.
-  ///
-  /// See [TokenRefreshHandler.shouldRetry] for a ready-made 401-based implementation.
-  final Future<bool> Function(HttpResponseException exception)? shouldRetry;
-
-  /// Called before the request is retried, after [shouldRetry] returned `true`.
-  ///
-  /// Use this to refresh tokens, insert delays, or perform any side-effect
-  /// needed before the retry. Must throw if the pre-retry action fails, in
-  /// which case the original exception is re-thrown to the caller.
-  ///
-  /// See [TokenRefreshHandler.onBeforeRetry] for a de-duplicated token-refresh implementation.
-  final Future<void> Function(HttpResponseException exception)? onBeforeRetry;
+  /// When `null`, no retry or pre-send logic is applied.
+  final HttpRetryPolicy? retryPolicy;
 
   /// How long to wait for a response before throwing a
   /// [ConnectivityException] with [ConnectivityExceptionType.timeout].
@@ -256,8 +228,7 @@ class SleekHttpClient {
     http.BaseRequest request, {
     bool retryEnabled = true,
   }) async {
-    // Pause if a token refresh is already in progress, so this request is not sent with a stale token only to get a 401 and retry anyway.
-    await beforeSend?.call();
+    await retryPolicy?.beforeSend();
 
     // Attach auth header here so it uses the most recent token on every retry, and also picks up the fresh token after a beforeSend pause.
     request.headers.addAll(_buildAuthHeader());
@@ -270,11 +241,11 @@ class SleekHttpClient {
       }
 
       // Check retry is possible
-      if (e is HttpResponseException && retryEnabled && shouldRetry != null) {
+      if (e is HttpResponseException && retryEnabled && retryPolicy != null) {
         // Check if we should retry
-        if (await shouldRetry!(e)) {
+        if (await retryPolicy!.shouldRetry(e)) {
           // Call pre-retry task before retrying. May throw.
-          await onBeforeRetry?.call(e);
+          await retryPolicy!.onBeforeRetry(e);
 
           // Retry the request with a fresh copy
           return _sendHandledRequest<T>(

@@ -80,9 +80,7 @@ Future<void> _scenario2ExcludedPathNoRetry() async {
   final client = SleekHttpClient(
     client: interceptor,
     authorityGetter: () => 'jsonplaceholder.typicode.com',
-    shouldRetry: tokenHandler.shouldRetry,
-    onBeforeRetry: tokenHandler.onBeforeRetry,
-    beforeSend: tokenHandler.beforeSend,
+    retryPolicy: tokenHandler,
     logConfig: HttpClientLogConfig(logger: (msg) => _print('  $msg')),
   );
 
@@ -139,11 +137,9 @@ Future<void> _scenario3RetryAfter401WithConcurrentRequests() async {
   final client = SleekHttpClient(
     client: interceptor,
     authorityGetter: () => 'jsonplaceholder.typicode.com',
-    shouldRetry: tokenHandler.shouldRetry,
-    onBeforeRetry: tokenHandler.onBeforeRetry,
     // Key: new requests started while the refresh is running will pause here
     // instead of being dispatched with the stale token.
-    beforeSend: tokenHandler.beforeSend,
+    retryPolicy: tokenHandler,
     logConfig: HttpClientLogConfig(logger: (msg) => _print('  $msg')),
   );
 

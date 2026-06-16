@@ -77,11 +77,7 @@ final tokenHandler = TokenRefreshHandler(
 final client = SleekHttpClient(
   authorityGetter: () => 'api.example.com',
   authorizationHeaderGetter: () => tokenStorage.accessToken,
-  shouldRetry: tokenHandler.shouldRetry,
-  onBeforeRetry: tokenHandler.onBeforeRetry,
-  // Pauses requests that start while a refresh is running, so they are never
-  // sent with a stale token.
-  beforeSend: tokenHandler.beforeSend,
+  retryPolicy: tokenHandler,
 );
 ```
 
@@ -99,9 +95,17 @@ final client = SleekHttpClient(
 6. If the retry also fails, or if `onBeforeRetry` throws, the error is surfaced
    to the caller.
 
-> **Custom retry logic** — `shouldRetry`, `onBeforeRetry`, and `beforeSend` are
-> plain async callbacks, so you can implement any policy (e.g. back-off on 429,
-> retry on 503) without subclassing.
+> **Custom retry logic** — implement `HttpRetryPolicy` directly, or use
+> `HttpRetryPolicyBuilder` for a callback-based one-off (e.g. back-off on 429):
+>
+> ```dart
+> SleekHttpClient(
+>   retryPolicy: HttpRetryPolicyBuilder(
+>     shouldRetry: (e) async => e.statusCode == 429,
+>     onBeforeRetry: (_) => Future.delayed(const Duration(seconds: 2)),
+>   ),
+> );
+> ```
 
 ## Response types
 
