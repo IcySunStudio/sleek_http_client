@@ -57,6 +57,14 @@ class TokenRefreshHandler {
     return Future.value(!isExcluded);
   }
 
+  /// Pauses the caller if a token refresh is currently in progress.
+  ///
+  /// Pass this to [SleekHttpClient.beforeSend] to prevent requests from being
+  /// sent with a known-stale token while a refresh is already running.
+  ///
+  /// Returns immediately when no refresh is in progress.
+  Future<void> beforeSend() => _task ?? Future.value();
+
   /// Executes the token refresh before the request is retried.
   ///
   /// Concurrent calls are de-duplicated: if a refresh is already in progress,

@@ -31,6 +31,7 @@ class SleekHttpClient {
     this.basePath = '',
     this.headersGetter,
     this.authorizationHeaderGetter,
+    this.beforeSend,
     this.shouldRetry,
     this.onBeforeRetry,
     this.timeOutDuration = const Duration(seconds: 30),
@@ -71,6 +72,20 @@ class SleekHttpClient {
   /// Returns the current authorization header value (e.g. `Bearer <token>`).
   /// When `null`, no `Authorization` header is added.
   final String? Function()? authorizationHeaderGetter;
+
+  /// Called before every request is sent, giving an opportunity to pause
+  /// before the request is dispatched.
+  ///
+  /// If a token refresh is in progress, requests started during that window
+  /// would otherwise be sent with the stale token, receive a 401, and only
+  /// then join the retry queue. Providing [TokenRefreshHandler.beforeSend]
+  /// here pauses those requests silently until the refresh completes, so they
+  /// are never sent with a bad token in the first place.
+  ///
+  /// Returns immediately when nothing is pending.
+  ///
+  /// See [TokenRefreshHandler.beforeSend].
+  final Future<void> Function()? beforeSend;
 
   /// Called after a failed request to decide whether to retry it.
   ///
@@ -241,7 +256,10 @@ class SleekHttpClient {
     http.BaseRequest request, {
     bool retryEnabled = true,
   }) async {
-    // Attach auth header here so it uses the most recent token on every retry.
+    // Pause if a token refresh is already in progress, so this request is not sent with a stale token only to get a 401 and retry anyway.
+    await beforeSend?.call();
+
+    // Attach auth header here so it uses the most recent token on every retry, and also picks up the fresh token after a beforeSend pause.
     request.headers.addAll(_buildAuthHeader());
 
     try {
