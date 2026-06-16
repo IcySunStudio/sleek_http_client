@@ -3,9 +3,10 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:http/http.dart' as http;
 
+import 'connectivity_check.dart'
+    if (dart.library.ui) 'connectivity_check_flutter.dart';
 import 'exceptions.dart';
 import 'retry_handlers.dart';
 import 'types.dart';
@@ -35,7 +36,9 @@ class SleekHttpClient {
     this.timeOutDuration = const Duration(seconds: 30),
     this.errorBuilder,
     this.logConfig,
-  })  : _client = client ?? http.Client(),
+    Future<bool> Function()? isOnlineChecker,
+  })  : _isOnlineChecker = isOnlineChecker,
+        _client = client ?? http.Client(),
         assert(
           onBeforeRetry == null || shouldRetry != null,
           'onBeforeRetry is set but shouldRetry is null — '
@@ -49,8 +52,12 @@ class SleekHttpClient {
   /// Full JSON content-type header value.
   static const contentTypeJson = '$contentTypeJsonMimeType; charset=utf-8';
 
-  // Internal http client
+  /// Internal http client
   final http.Client _client;
+
+  /// Optional override for the connectivity check (useful for tests and
+  /// environments where connectivity_plus is unavailable, e.g. pure Dart CLI).
+  final Future<bool> Function()? _isOnlineChecker;
 
   /// Returns the authority (host) used for every request, e.g. `api.example.com`.
   final String Function() authorityGetter;
@@ -192,18 +199,23 @@ class SleekHttpClient {
 
   /// Throws a [ConnectivityException] with
   /// [ConnectivityExceptionType.noInternet] when the device is offline.
+  ///
+  /// Uses the [isOnlineChecker] override if provided; otherwise falls back to
+  /// [isOnline].
   Future<void> throwIfOffline() async {
-    if (!(await isOnline())) {
+    final online = await (_isOnlineChecker?.call() ?? isOnline());
+    if (!online) {
       logConfig?.logger('[SleekHttp] ❌ NO INTERNET');
       throw const ConnectivityException(ConnectivityExceptionType.noInternet);
     }
   }
 
   /// Returns `true` when the device has at least one active network interface.
-  static Future<bool> isOnline() async {
-    final result = await Connectivity().checkConnectivity();
-    return !result.contains(ConnectivityResult.none);
-  }
+  ///
+  /// In non-Flutter environments (e.g. pure-Dart CLI) this always returns
+  /// `true`. Override per-instance via the [SleekHttpClient.isOnlineChecker]
+  /// constructor parameter.
+  static Future<bool> isOnline() => defaultIsOnline();
 
   // ---------------------------------------------------------------------------
   // Private – header building
