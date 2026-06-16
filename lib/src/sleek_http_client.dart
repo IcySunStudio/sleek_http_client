@@ -199,12 +199,8 @@ class SleekHttpClient {
 
   /// Throws a [ConnectivityException] with
   /// [ConnectivityExceptionType.noInternet] when the device is offline.
-  ///
-  /// Uses the [isOnlineChecker] override if provided; otherwise falls back to
-  /// [isOnline].
   Future<void> throwIfOffline() async {
-    final online = await (_isOnlineChecker?.call() ?? isOnline());
-    if (!online) {
+    if (!await isOnline()) {
       logConfig?.logger('[SleekHttp] ❌ NO INTERNET');
       throw const ConnectivityException(ConnectivityExceptionType.noInternet);
     }
@@ -212,10 +208,11 @@ class SleekHttpClient {
 
   /// Returns `true` when the device has at least one active network interface.
   ///
-  /// In non-Flutter environments (e.g. pure-Dart CLI) this always returns
-  /// `true`. Override per-instance via the [SleekHttpClient.isOnlineChecker]
-  /// constructor parameter.
-  static Future<bool> isOnline() => defaultIsOnline();
+  /// Resolution order:
+  /// 1. The [isOnlineChecker] override passed to the constructor, if any.
+  /// 2. The platform connectivity check via `connectivity_plus` (Flutter), or
+  ///    always `true` in non-Flutter environments (pure-Dart CLI / tests).
+  Future<bool> isOnline() => _isOnlineChecker?.call() ?? defaultIsOnline();
 
   // ---------------------------------------------------------------------------
   // Private – header building
