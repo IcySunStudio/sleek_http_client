@@ -309,19 +309,21 @@ class SleekHttpClient {
       if (cfg.logHeaders) headers = r.headers.toString();
     } else {
       symbol = '⬆️️';
-      body = switch (request) {
-        http.Request() => request.body,
-        http.MultipartRequest() => 'Multipart${json.encode({
-          'fields': request.fields,
-          'files': request.files.map((f) => {
-            'field': f.field,
-            'filename': f.filename,
-            'length': f.length,
-            'contentType': f.contentType.toString(),
-          }).toList(),
-        })}',
-        _ => '',
-      };
+      if (cfg.includeBody) {
+        body = switch (request) {
+          http.Request() => request.body,
+          http.MultipartRequest() => 'Multipart${json.encode({
+            'fields': request.fields,
+            'files': request.files.map((f) => {
+              'field': f.field,
+              'filename': f.filename,
+              'length': f.length,
+              'contentType': f.contentType.toString(),
+            }).toList(),
+          })}',
+          _ => '',
+        };
+      }
       if (cfg.logHeaders) headers = request?.headers.toString();
     }
 

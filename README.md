@@ -117,6 +117,25 @@ final client = SleekHttpClient(
 | `BytesBody` | Raw bytes + MIME type |
 | *(omitted / `void`)* | `null` — body is ignored |
 
+## Logging
+
+Pass an `HttpClientLogConfig` to control what gets logged. For Flutter apps, a
+common setup is to use `debugPrint` as the logger, skip headers (which may
+contain sensitive tokens), and only include bodies outside of release mode:
+
+```dart
+import 'package:flutter/foundation.dart';
+
+final client = SleekHttpClient(
+  authorityGetter: () => 'api.example.com',
+  logConfig: HttpClientLogConfig(
+    logger: debugPrint,
+    logHeaders: false,
+    includeBody: !kReleaseMode,
+  ),
+);
+```
+
 ## Error handling
 
 Non-2xx responses throw `HttpResponseException`. Provide an `errorBuilder` to
