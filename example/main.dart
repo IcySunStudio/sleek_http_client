@@ -43,7 +43,7 @@ Future<void> _scenario1CleanRequest() async {
 
   final client = SleekHttpClient(
     authorityGetter: () => 'jsonplaceholder.typicode.com',
-    interceptors: [LoggingInterceptor(logger: (msg) => _print('  $msg'))],
+    interceptors: [LoggingInterceptor(logger: _printIndented)],
   );
 
   try {
@@ -82,7 +82,7 @@ Future<void> _scenario2ExcludedPathNoRetry() async {
     authorityGetter: () => 'jsonplaceholder.typicode.com',
     interceptors: [
       tokenRefreshInterceptor,
-      LoggingInterceptor(logger: (msg) => _print('  $msg')),
+      LoggingInterceptor(logger: _printIndented),
     ],
   );
 
@@ -139,11 +139,15 @@ Future<void> _scenario3RetryAfter401WithConcurrentRequests() async {
   final client = SleekHttpClient(
     client: interceptor,
     authorityGetter: () => 'jsonplaceholder.typicode.com',
+    authorizationHeaderGetter: () => 'Bearer #$refreshCallCount',
     // Key: new requests started while the refresh is running will pause here
     // instead of being dispatched with the stale token.
     interceptors: [
       tokenRefreshInterceptor,
-      LoggingInterceptor(logger: (msg) => _print('  $msg')),
+      LoggingInterceptor(
+        logger: _printIndented,
+        logHeaders: true,
+      ),
     ],
   );
 
@@ -192,7 +196,7 @@ Future<void> _scenario4CacheInterceptorShortCircuit() async {
     authorityGetter: () => 'jsonplaceholder.typicode.com',
     interceptors: [
       _InMemoryCacheInterceptor(),
-      LoggingInterceptor(logger: (msg) => _print('  $msg')),
+      LoggingInterceptor(logger: _printIndented),
     ],
   );
 
@@ -344,6 +348,11 @@ void _assert(bool condition, String description, Object actual) {
 }
 
 void _print(String text) => print(text); // ignore: avoid_print
+
+/// Prints a (possibly multi-line) log message with every line indented,
+/// so headers logged on a second line (via `LoggingInterceptor(logHeaders: true)`)
+/// line up with the rest of the output.
+void _printIndented(String text) => _print(text.split('\n').map((line) => '  $line').join('\n'));
 
 String _truncate(Object? value, [int max = 40]) {
   final s = value?.toString() ?? '';

@@ -9,6 +9,7 @@ import 'connectivity_check.dart'
     if (dart.library.ui) 'connectivity_check_flutter.dart';
 import 'exceptions.dart';
 import 'interceptors/interceptor.dart';
+import 'interceptors/logging_interceptor.dart';
 import 'types.dart';
 
 export 'exceptions.dart';
@@ -78,7 +79,18 @@ class SleekHttpClient {
   ///   (place it last so it only logs actual network calls).
   ///
   /// Implement [HttpInterceptor] directly for custom behavior (e.g. a disk-cache short-circuit).
+  ///
+  /// When [authorizationHeaderGetter] is set, [SleekHttpClient] automatically
+  /// inserts an internal auth-header interceptor right before the first
+  /// [LoggingInterceptor] found here (or at the innermost position if none),
+  /// so a `logHeaders: true` log line reflects the actual `Authorization`
+  /// header sent — see [_buildEffectiveInterceptors].
   final List<HttpInterceptor> interceptors;
+
+  /// [interceptors], plus the internal auth-header interceptor inserted at
+  /// the right spot. Computed once in the constructor and used for every
+  /// request. See [_buildEffectiveInterceptors].
+  late final List<HttpInterceptor> _effectiveInterceptors = _buildEffectiveInterceptors();
 
   /// How long to wait for a response before throwing a
   /// [ConnectivityException] with [ConnectivityExceptionType.timeout].
@@ -225,16 +237,45 @@ class SleekHttpClient {
   // ---------------------------------------------------------------------------
 
   Future<T?> _sendHandledRequest<T>(http.BaseRequest request) async {
-    final response = await runInterceptorChain(request, interceptors, _sendRequest);
+    final response = await runInterceptorChain(request, _effectiveInterceptors, _sendRequest);
     return _ResponseHandler(response).parseAs<T>(errorBuilder: errorBuilder);
   }
 
-  /// The terminal link of the interceptor chain: attaches the auth header
-  /// (fresh on every attempt — important for retries after a token refresh),
-  /// checks connectivity, and performs the actual network call with timeout.
-  Future<http.Response> _sendRequest(http.BaseRequest request) async {
-    request.headers.addAll(_buildAuthHeader());
+  /// Builds the interceptor list actually used to send requests: [interceptors]
+  /// plus an internal [_AuthHeaderInterceptor], if [authorizationHeaderGetter]
+  /// is set.
+  ///
+  /// The auth header is attached via an *interceptor* — instead of a single
+  /// inline `request.headers.addAll(...)` line in [_sendRequest] — for two
+  /// reasons:
+  /// 1. **Freshness on retry**: as a chain link, it re-runs every time
+  ///    `chain.proceed` reaches it, including on a retry triggered by e.g.
+  ///    [TokenRefreshInterceptor] — so the retried request always carries the
+  ///    latest value, not one baked in before the refresh happened.
+  /// 2. **Orderability**: being an ordinary link makes its position in the
+  ///    chain explicit and controllable. Placing it right before the first
+  ///    [LoggingInterceptor] (rather than in the fixed, always-innermost
+  ///    terminal step) lets that logger observe the real headers that were
+  ///    sent — a plain inline attachment in the terminal step would always be
+  ///    invisible to every interceptor, no matter where they're placed.
+  List<HttpInterceptor> _buildEffectiveInterceptors() {
+    if (authorizationHeaderGetter == null) return interceptors;
 
+    final result = List<HttpInterceptor>.of(interceptors);
+    final loggingIndex = result.indexWhere((i) => i is LoggingInterceptor);
+    final authInterceptor = _AuthHeaderInterceptor(_buildAuthHeader);
+
+    if (loggingIndex == -1) {
+      result.add(authInterceptor);
+    } else {
+      result.insert(loggingIndex, authInterceptor);
+    }
+    return result;
+  }
+
+  /// The terminal link of the interceptor chain: checks connectivity and
+  /// performs the actual network call with timeout.
+  Future<http.Response> _sendRequest(http.BaseRequest request) async {
     await throwIfOffline();
 
     try {
@@ -295,6 +336,25 @@ class BytesBody {
 // =============================================================================
 // Internal helpers
 // =============================================================================
+
+/// Attaches headers built from [_headerGetter] to every request, evaluated
+/// fresh every time `chain.proceed` reaches this link (see
+/// [SleekHttpClient._buildEffectiveInterceptors] for why this is an
+/// interceptor rather than an inline header attachment).
+///
+/// Private and not exported: it only exists to be auto-inserted by
+/// [SleekHttpClient] itself, not to be used directly.
+class _AuthHeaderInterceptor implements HttpInterceptor {
+  _AuthHeaderInterceptor(this._headerGetter);
+
+  final Map<String, String> Function() _headerGetter;
+
+  @override
+  Future<http.Response> intercept(http.BaseRequest request, HttpInterceptorChain chain) {
+    request.headers.addAll(_headerGetter());
+    return chain.proceed(request);
+  }
+}
 
 class _ResponseHandler {
   _ResponseHandler(this.response)

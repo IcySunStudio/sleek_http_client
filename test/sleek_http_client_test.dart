@@ -143,6 +143,30 @@ void main() {
     });
 
     test(
+      'LoggingInterceptor observes the actual Authorization header, even without reordering interceptors',
+      () async {
+        // authorizationHeaderGetter + a LoggingInterceptor placed innermost:
+        // SleekHttpClient must auto-insert the auth-header attachment right
+        // before LoggingInterceptor, so logHeaders:true reflects what was
+        // actually sent — not the pre-attachment request.
+        final mockClient = MockClient((request) async => http.Response('ok', 200));
+        final logs = <String>[];
+
+        final client = SleekHttpClient(
+          client: mockClient,
+          authorityGetter: () => 'api.example.com',
+          authorizationHeaderGetter: () => 'Bearer secret-token',
+          interceptors: [LoggingInterceptor(logger: logs.add, logHeaders: true)],
+        );
+
+        await client.send(HttpMethod.get, '/secure');
+
+        final requestLog = logs.first;
+        expect(requestLog, contains('Bearer secret-token'));
+      },
+    );
+
+    test(
       'concurrent requests are paused during an in-flight refresh and gracefully resumed with the fresh token',
       () async {
         // A hits a real 401 (stale token) and triggers the refresh.
