@@ -33,18 +33,18 @@ final client = SleekHttpClient(
   interceptors: [LoggingInterceptor(logger: print)],
 );
 
-// GET  → returns Map<String, dynamic>?
+// GET  → returns Map<String, dynamic> (throws if the body is missing/malformed)
 final json = await client.send<JsonObject>(HttpMethod.get, '/users/me');
 
-// POST
-await client.send<void>(
+// POST — omit the type argument (defaults to dynamic) when you don't care about the body
+await client.send(
   HttpMethod.post,
   '/posts',
   bodyJson: {'title': 'Hello'},
 );
 
 // File upload
-await client.sendMultipartRequest<void>(
+await client.sendMultipartRequest(
   '/upload',
   files: [
     MultipartRequestFileData(
@@ -155,13 +155,24 @@ logging, the real network call).
 
 ## Response types
 
-| Type argument | Returns |
-|---|---|
-| `JsonObject` | `Map<String, dynamic>?` decoded from JSON body |
-| `JsonList` | `List<dynamic>?` decoded from JSON body |
-| `String` | Raw response body string |
-| `BytesBody` | Raw bytes + MIME type |
-| *(omitted / `void`)* | `null` — body is ignored |
+`send<T>`/`sendMultipartRequest<T>` return `T` directly — **not** `T?`. For
+`JsonObject`/`JsonList`, `T`'s own nullability controls what happens when the
+server returns a `null` body:
+
+| Type argument | Returns | If the body is JSON `null` |
+|---|---|---|
+| `JsonObject` | `Map<String, dynamic>` | throws `NullResponseBodyException` |
+| `JsonObject?` | `Map<String, dynamic>?` | `null` |
+| `JsonList` | `List<dynamic>` | throws `NullResponseBodyException` |
+| `JsonList?` | `List<dynamic>?` | `null` |
+| `String` | Raw response body string (never null) | — |
+| `BytesBody` | Raw bytes + MIME type (never null) | — |
+| *(omitted / `dynamic`)* | `null` — body is ignored | — |
+
+A malformed body, or JSON of the wrong shape (e.g. a list where an object was
+expected), always throws — `FormatException` / `TypeError` respectively —
+regardless of nullability: only an explicit JSON `null` is treated as a
+legitimate value.
 
 ## Logging
 

@@ -48,7 +48,7 @@ Future<void> _scenario1CleanRequest() async {
 
   try {
     final user = await client.send<JsonObject>(HttpMethod.get, '/users/1');
-    _pass('Got user: "${user?['name']}" <${user?['email']}>');
+    _pass('Got user: "${user['name']}" <${user['email']}>');
   } on HttpResponseException catch (e) {
     _fail('Unexpected HTTP error: $e');
   }
@@ -167,9 +167,9 @@ Future<void> _scenario3RetryAfter401WithConcurrentRequests() async {
 
   final results = await Future.wait([futureA, futureB, futureC]);
 
-  _pass('A: "${_truncate(results[0]?['title'])}"');
-  _pass('B: "${_truncate(results[1]?['title'])}"');
-  _pass('C: "${_truncate(results[2]?['title'])}"');
+  _pass('A: "${_truncate(results[0]['title'])}"');
+  _pass('B: "${_truncate(results[1]['title'])}"');
+  _pass('C: "${_truncate(results[2]['title'])}"');
   _assert(refreshCallCount == 1, 'refresh was called exactly once', refreshCallCount);
   _assert(interceptorFireCount == 1, 'interceptor fired exactly once (only A got a 401)', interceptorFireCount);
 }
@@ -203,8 +203,8 @@ Future<void> _scenario4CacheInterceptorShortCircuit() async {
   final first = await client.send<JsonObject>(HttpMethod.get, '/users/2');
   final second = await client.send<JsonObject>(HttpMethod.get, '/users/2');
 
-  _pass('First call:  "${first?['name']}" (from network)');
-  _pass('Second call: "${second?['name']}" (from cache)');
+  _pass('First call:  "${first['name']}" (from network)');
+  _pass('Second call: "${second['name']}" (from cache)');
   _assert(networkCallCount == 1, 'exactly one real network call was made', networkCallCount);
 }
 

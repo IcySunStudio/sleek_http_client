@@ -27,6 +27,70 @@ void main() {
       expect(result, {'id': 1, 'name': 'Ada'});
     });
 
+    test('send<JsonObject>() throws NullResponseBodyException on a literal JSON null body', () async {
+      final mockClient = MockClient((request) async {
+        return http.Response('null', 200, headers: {'content-type': 'application/json; charset=utf-8'});
+      });
+
+      final client = SleekHttpClient(
+        client: mockClient,
+        authorityGetter: () => 'api.example.com',
+      );
+
+      expect(
+        () => client.send<JsonObject>(HttpMethod.get, '/users/1'),
+        throwsA(
+          isA<NullResponseBodyException>().having((e) => e.expectedType, 'expectedType', JsonObject),
+        ),
+      );
+    });
+
+    test('send<JsonObject?>() resolves to null on a literal JSON null body', () async {
+      final mockClient = MockClient((request) async {
+        return http.Response('null', 200, headers: {'content-type': 'application/json; charset=utf-8'});
+      });
+
+      final client = SleekHttpClient(
+        client: mockClient,
+        authorityGetter: () => 'api.example.com',
+      );
+
+      final result = await client.send<JsonObject?>(HttpMethod.get, '/users/1');
+      expect(result, isNull);
+    });
+
+    test('send<JsonObject>() throws FormatException on a malformed JSON body', () async {
+      final mockClient = MockClient((request) async {
+        return http.Response('not json', 200, headers: {'content-type': 'application/json; charset=utf-8'});
+      });
+
+      final client = SleekHttpClient(
+        client: mockClient,
+        authorityGetter: () => 'api.example.com',
+      );
+
+      expect(
+        () => client.send<JsonObject>(HttpMethod.get, '/users/1'),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('send<JsonObject>() throws TypeError on a wrong-shape JSON body (a list instead of an object)', () async {
+      final mockClient = MockClient((request) async {
+        return http.Response('[1,2,3]', 200, headers: {'content-type': 'application/json; charset=utf-8'});
+      });
+
+      final client = SleekHttpClient(
+        client: mockClient,
+        authorityGetter: () => 'api.example.com',
+      );
+
+      expect(
+        () => client.send<JsonObject>(HttpMethod.get, '/users/1'),
+        throwsA(isA<TypeError>()),
+      );
+    });
+
     test('throws HttpResponseException on a non-2xx response', () async {
       final mockClient = MockClient((request) async {
         return http.Response(

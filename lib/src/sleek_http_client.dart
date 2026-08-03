@@ -137,7 +137,12 @@ class SleekHttpClient {
   ///
   /// [authority] overrides [authorityGetter] for this single call.
   /// [headers] are merged with the global [headersGetter] headers.
-  Future<T?> send<T>(
+  ///
+  /// For [JsonObject] / [JsonList], `T` itself controls null-tolerance: use
+  /// `send<JsonObject>(...)` to require a non-null body (throws
+  /// [NullResponseBodyException] if the server returns JSON `null`), or
+  /// `send<JsonObject?>(...)` if a `null` body is a legitimate outcome.
+  Future<T> send<T>(
     HttpMethod method,
     String path, {
     String? authority,
@@ -167,7 +172,7 @@ class SleekHttpClient {
   /// Builds and sends a multipart request (file upload).
   ///
   /// Currently only supports files referenced by a local file-system path.
-  Future<T?> sendMultipartRequest<T>(
+  Future<T> sendMultipartRequest<T>(
     String path, {
     Map<String, String>? headers,
     Map<String, String>? fields,
@@ -236,7 +241,7 @@ class SleekHttpClient {
   // Private – request dispatch
   // ---------------------------------------------------------------------------
 
-  Future<T?> _sendHandledRequest<T>(http.BaseRequest request) async {
+  Future<T> _sendHandledRequest<T>(http.BaseRequest request) async {
     final response = await runInterceptorChain(request, _effectiveInterceptors, _sendRequest);
     return _ResponseHandler(response).parseAs<T>(errorBuilder: errorBuilder);
   }
@@ -337,6 +342,14 @@ class BytesBody {
 // Internal helpers
 // =============================================================================
 
+/// Returns the reified [Type] for [X], including its nullability — e.g.
+/// `_typeOf<int?>()` returns the `Type` object for `int?`, distinct from
+/// `_typeOf<int>()`. Used to compare a generic `T` against the nullable
+/// variant of a known type: unlike a generic type *argument* (e.g.
+/// `bodyJson<T?>()`), a nullable type has no literal expression syntax on
+/// its own (`int?` alone is parsed as the start of a conditional `?:`).
+Type _typeOf<X>() => X;
+
 /// Attaches headers built from [_headerGetter] to every request, evaluated
 /// fresh every time `chain.proceed` reaches this link (see
 /// [SleekHttpClient._buildEffectiveInterceptors] for why this is an
@@ -368,12 +381,16 @@ class _ResponseHandler {
   final bool isSuccess;
   final bool isBodyJson;
 
-  String? _bodyString;
-
-  String get bodyString => _bodyString ??= response.body;
+  late final String bodyString = response.body;
 
   T bodyJson<T>() => json.decode(bodyString) as T;
 
+  /// Best-effort JSON decoding: swallows any decoding failure to `null`.
+  ///
+  /// Only used for the error-body case (see [parseAs]): the response is
+  /// already known to be an HTTP error, and it may not carry a JSON body at
+  /// all (plain text, HTML error page, empty body, ...) — a secondary parsing
+  /// failure here must not mask the real [HttpResponseException].
   T? bodyJsonOrNull<T>() {
     try {
       return bodyJson<T?>();
@@ -382,10 +399,20 @@ class _ResponseHandler {
     }
   }
 
-  T? parseAs<T>({HttpClientErrorBuilder? errorBuilder}) {
+  T parseAs<T>({HttpClientErrorBuilder? errorBuilder}) {
     if (isSuccess) {
       if (T == String) return bodyString as T;
-      if (T == JsonObject || T == JsonList) return bodyJsonOrNull<T>();
+      if (T == JsonObject || T == JsonList || T == _typeOf<JsonObject?>() || T == _typeOf<JsonList?>()) {
+        // Malformed JSON (`FormatException`) or an unexpected shape, e.g. a list where an object was expected (`TypeError`), is a server
+        // contract violation and is deliberately left to propagate here, rather than being silently swallowed to `null`.
+        final decoded = bodyJson<T?>();
+        if (decoded == null && null is! T) {
+          // T is a non-nullable request (e.g. `send<JsonObject>()`), but the server returned a literal JSON `null`
+          // — surface this distinctly instead of a confusing cast failure.
+          throw NullResponseBodyException(T);
+        }
+        return decoded as T;
+      }
       if (T == BytesBody) {
         return BytesBody._(
           response.headers[HttpHeaders.contentTypeHeader] ?? 'application/octet-stream',
