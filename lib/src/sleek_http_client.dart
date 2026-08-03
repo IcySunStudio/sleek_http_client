@@ -8,11 +8,13 @@ import 'package:http/http.dart' as http;
 import 'connectivity_check.dart'
     if (dart.library.ui) 'connectivity_check_flutter.dart';
 import 'exceptions.dart';
+import 'http_response_extensions.dart';
 import 'interceptors/interceptor.dart';
 import 'interceptors/logging_interceptor.dart';
 import 'types.dart';
 
 export 'exceptions.dart';
+export 'http_response_extensions.dart';
 export 'interceptors/interceptor.dart';
 export 'interceptors/logging_interceptor.dart';
 export 'interceptors/token_refresh_interceptor.dart';
@@ -370,34 +372,15 @@ class _AuthHeaderInterceptor implements HttpInterceptor {
 }
 
 class _ResponseHandler {
-  _ResponseHandler(this.response)
-      : isSuccess = SleekHttpClient.isStatusCodeSuccess(response.statusCode),
-        isBodyJson = ContentType.parse(
-          response.headers[HttpHeaders.contentTypeHeader] ?? '',
-        ).mimeType == SleekHttpClient.contentTypeJsonMimeType;
+  _ResponseHandler(this.response) : isSuccess = SleekHttpClient.isStatusCodeSuccess(response.statusCode);
 
   final http.Response response;
 
   final bool isSuccess;
-  final bool isBodyJson;
 
   late final String bodyString = response.body;
 
   T bodyJson<T>() => json.decode(bodyString) as T;
-
-  /// Best-effort JSON decoding: swallows any decoding failure to `null`.
-  ///
-  /// Only used for the error-body case (see [parseAs]): the response is
-  /// already known to be an HTTP error, and it may not carry a JSON body at
-  /// all (plain text, HTML error page, empty body, ...) — a secondary parsing
-  /// failure here must not mask the real [HttpResponseException].
-  T? bodyJsonOrNull<T>() {
-    try {
-      return bodyJson<T?>();
-    } catch (_) {
-      return null;
-    }
-  }
 
   T parseAs<T>({HttpClientErrorBuilder? errorBuilder}) {
     if (isSuccess) {
@@ -422,12 +405,15 @@ class _ResponseHandler {
       if (isTypeUndefined<T>()) return null as T;
       throw UnimplementedError('$T is not a supported response type');
     } else {
-      JsonObject? parsed;
-      if (isBodyJson) parsed = bodyJsonOrNull<JsonObject>();
+      // The response is already known to be an HTTP error, and it may not carry a JSON body at all (plain text,
+      // HTML error page, empty body, ...) — a secondary parsing failure here must not mask the real
+      // [HttpResponseException], hence the best-effort `tryDecodeJson` instead of `bodyJson`.
+      final parsed = response.isJson ? response.tryDecodeJson<JsonObject>() : null;
       throw errorBuilder?.call(response, parsed) ?? HttpResponseException(response, parsed);
     }
   }
 }
+
 
 /// A [http.MultipartRequest] that can be cloned for automatic retry.
 ///
