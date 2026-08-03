@@ -8,20 +8,21 @@ import 'package:http/http.dart' as http;
 import 'connectivity_check.dart'
     if (dart.library.ui) 'connectivity_check_flutter.dart';
 import 'exceptions.dart';
-import 'retry_handlers.dart';
+import 'interceptors/interceptor.dart';
 import 'types.dart';
 
 export 'exceptions.dart';
-export 'retry_handlers.dart';
+export 'interceptors/interceptor.dart';
+export 'interceptors/logging_interceptor.dart';
+export 'interceptors/token_refresh_interceptor.dart';
 export 'types.dart';
 
 /// A clean, feature-rich HTTP client for Dart.
 ///
 /// Features:
 /// - Automatic connectivity checking
-/// - JWT / OAuth token refresh with de-duplication
+/// - Composable interceptor chain (retry, token refresh, logging, cache, ...)
 /// - Multipart file upload with retry support
-/// - Structured request / response logging
 /// - Strongly typed response parsing
 /// - Configurable timeout
 class SleekHttpClient {
@@ -31,10 +32,9 @@ class SleekHttpClient {
     this.basePath = '',
     this.headersGetter,
     this.authorizationHeaderGetter,
-    this.retryPolicy,
+    this.interceptors = const [],
     this.timeOutDuration = const Duration(seconds: 30),
     this.errorBuilder,
-    this.logConfig,
     Future<bool> Function()? isOnlineChecker,
   })  : _isOnlineChecker = isOnlineChecker,
         _client = client ?? http.Client();
@@ -65,16 +65,20 @@ class SleekHttpClient {
   /// When `null`, no `Authorization` header is added.
   final String? Function()? authorizationHeaderGetter;
 
-  /// Pluggable retry and pre-send pause logic.
+  /// The interceptor chain, applied to every request.
   ///
-  /// - Pass a [TokenRefreshHandler] for the standard JWT / OAuth token-refresh
-  ///   pattern (401 retry with de-duplicated refresh and pre-send pause).
-  /// - Pass an [HttpRetryPolicyBuilder] to configure individual hooks without
-  ///   writing a full class.
-  /// - Implement [HttpRetryPolicy] directly for full custom control.
+  /// Index 0 is the outermost interceptor (sees every retry / short-circuit
+  /// decision made by interceptors after it); the last one is the innermost,
+  /// closest to the actual network call.
   ///
-  /// When `null`, no retry or pre-send logic is applied.
-  final HttpRetryPolicy? retryPolicy;
+  /// Ship-in-the-box interceptors:
+  /// - [TokenRefreshInterceptor] for the standard JWT / OAuth token-refresh
+  ///   pattern (401 retry with de-duplicated refresh).
+  /// - [LoggingInterceptor] for structured request / response logging
+  ///   (place it last so it only logs actual network calls).
+  ///
+  /// Implement [HttpInterceptor] directly for custom behavior (e.g. a disk-cache short-circuit).
+  final List<HttpInterceptor> interceptors;
 
   /// How long to wait for a response before throwing a
   /// [ConnectivityException] with [ConnectivityExceptionType.timeout].
@@ -85,9 +89,6 @@ class SleekHttpClient {
   /// When provided, every non-2xx response will be turned into the returned
   /// exception instead of the default [HttpResponseException].
   final HttpClientErrorBuilder? errorBuilder;
-
-  /// Logging configuration. `null` disables logging.
-  final HttpClientLogConfig? logConfig;
 
   // ---------------------------------------------------------------------------
   // Public helpers
@@ -188,7 +189,6 @@ class SleekHttpClient {
   /// [ConnectivityExceptionType.noInternet] when the device is offline.
   Future<void> throwIfOffline() async {
     if (!await isOnline()) {
-      logConfig?.logger('[SleekHttp] ❌ NO INTERNET');
       throw const ConnectivityException(ConnectivityExceptionType.noInternet);
     }
   }
@@ -224,114 +224,25 @@ class SleekHttpClient {
   // Private – request dispatch
   // ---------------------------------------------------------------------------
 
-  Future<T?> _sendHandledRequest<T>(
-    http.BaseRequest request, {
-    bool retryEnabled = true,
-  }) async {
-    await retryPolicy?.beforeSend();
+  Future<T?> _sendHandledRequest<T>(http.BaseRequest request) async {
+    final response = await runInterceptorChain(request, interceptors, _sendRequest);
+    return _ResponseHandler(response).parseAs<T>(errorBuilder: errorBuilder);
+  }
 
-    // Attach auth header here so it uses the most recent token on every retry, and also picks up the fresh token after a beforeSend pause.
+  /// The terminal link of the interceptor chain: attaches the auth header
+  /// (fresh on every attempt — important for retries after a token refresh),
+  /// checks connectivity, and performs the actual network call with timeout.
+  Future<http.Response> _sendRequest(http.BaseRequest request) async {
     request.headers.addAll(_buildAuthHeader());
 
-    try {
-      return await _sendRequest<T>(request);
-    } catch (e) {
-      if (e is TimeoutException) {
-        throw const ConnectivityException(ConnectivityExceptionType.timeout);
-      }
-
-      // Check retry is possible
-      if (e is HttpResponseException && retryEnabled && retryPolicy != null) {
-        // Check if we should retry
-        if (await retryPolicy!.shouldRetry(e)) {
-          // Call pre-retry task before retrying. May throw.
-          await retryPolicy!.onBeforeRetry(e);
-
-          // Retry the request with a fresh copy
-          return _sendHandledRequest<T>(
-            await request.copyAsNew(),
-            retryEnabled: false,
-          );
-        }
-      }
-
-      rethrow;
-    }
-  }
-
-  Future<T?> _sendRequest<T>(http.BaseRequest request) async {
-    _log(request: request);
     await throwIfOffline();
 
-    final response = await (() async {
+    try {
       final streamed = await _client.send(request);
-      return http.Response.fromStream(streamed);
-    }()).timeout(timeOutDuration);
-
-    final handler = _ResponseHandler(response);
-    _log(responseHandler: handler);
-    return handler.parseAs<T>(errorBuilder: errorBuilder);
-  }
-
-
-  // ---------------------------------------------------------------------------
-  // Private – logging
-  // ---------------------------------------------------------------------------
-
-  void _log({
-    http.BaseRequest? request,
-    _ResponseHandler? responseHandler,
-  }) {
-    final cfg = logConfig;
-    if (cfg == null || (request == null && responseHandler == null)) return;
-
-    request = request ?? responseHandler!.response.request;
-    final method = request?.method;
-    final url = request?.url.toString();
-
-    String symbol;
-    String statusCode = '';
-    String body = '';
-    String? headers;
-
-    if (responseHandler != null) {
-      final r = responseHandler.response;
-      symbol = '⬇️';
-      statusCode = r.statusCode != 200 ? '(${r.statusCode}) ' : '';
-      if (cfg.includeBody) {
-        if (responseHandler.isBodyJson) {
-          body = responseHandler.bodyString.removeAllNewLines();
-        } else {
-          final sizeKb = ((r.contentLength ?? 0) / 1024).round();
-          body = sizeKb <= 10 ? responseHandler.bodyString.removeAllNewLines() : '$sizeKb kb';
-        }
-      }
-      if (cfg.logHeaders) headers = r.headers.toString();
-    } else {
-      symbol = '⬆️️';
-      if (cfg.includeBody) {
-        body = switch (request) {
-          http.Request() => request.body,
-          http.MultipartRequest() => 'Multipart${json.encode({
-            'fields': request.fields,
-            'files': request.files.map((f) => {
-              'field': f.field,
-              'filename': f.filename,
-              'length': f.length,
-              'contentType': f.contentType.toString(),
-            }).toList(),
-          })}',
-          _ => '',
-        };
-      }
-      if (cfg.logHeaders) headers = request?.headers.toString();
+      return await http.Response.fromStream(streamed).timeout(timeOutDuration);
+    } on TimeoutException {
+      throw const ConnectivityException(ConnectivityExceptionType.timeout);
     }
-
-    String message = '[SleekHttp] $symbol [$method $url] $statusCode$body';
-    if (headers != null) {
-      message += '\n[SleekHttp] ${symbol}ℹ️ $headers'; // ignore: unnecessary_brace_in_string_interps
-    }
-    cfg.logger(message);
   }
 }
 
@@ -349,27 +260,6 @@ enum HttpMethod {
 
   @override
   String toString() => name.toUpperCase();
-}
-
-/// Configuration for request/response logging.
-class HttpClientLogConfig {
-  const HttpClientLogConfig({
-    required this.logger,
-    this.logHeaders = false,
-    this.includeBody = true,
-  });
-
-  /// Function that receives each log message.
-  ///
-  /// Typically set to `print` in debug builds; disable in release builds to
-  /// avoid leaking sensitive data.
-  final void Function(String message) logger;
-
-  /// Whether to include raw request/response headers.
-  final bool logHeaders;
-
-  /// Whether to include the request/response body.
-  final bool includeBody;
 }
 
 /// Metadata for a single file to include in a multipart upload.
@@ -481,7 +371,9 @@ class _RetryableMultipartRequest extends http.MultipartRequest {
   }
 }
 
-extension _CopyableBaseRequest on http.BaseRequest {
+/// Extension allowing a [http.BaseRequest] to be cloned for retry, used by
+/// interceptors such as [TokenRefreshInterceptor].
+extension CopyableBaseRequest on http.BaseRequest {
   /// Creates a fresh copy of this request so it can be re-sent.
   Future<http.BaseRequest> copyAsNew() async {
     final source = this;
