@@ -27,6 +27,114 @@ void main() {
       expect(result, {'id': 1, 'name': 'Ada'});
     });
 
+    test('send<JsonList> parses a successful JSON list response', () async {
+      final mockClient = MockClient((request) async {
+        return http.Response(
+          json.encode([1, 2, 3]),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+
+      final client = SleekHttpClient(
+        client: mockClient,
+        authorityGetter: () => 'api.example.com',
+      );
+
+      final result = await client.send<JsonList>(HttpMethod.get, '/items');
+      expect(result, [1, 2, 3]);
+    });
+
+    test('send<String> returns the raw response body', () async {
+      final mockClient = MockClient((request) async => http.Response('plain text body', 200));
+
+      final client = SleekHttpClient(
+        client: mockClient,
+        authorityGetter: () => 'api.example.com',
+      );
+
+      final result = await client.send<String>(HttpMethod.get, '/raw');
+      expect(result, 'plain text body');
+    });
+
+    test('send<BytesBody> returns the raw bytes and content-type', () async {
+      final bytes = [1, 2, 3, 4];
+      final mockClient = MockClient((request) async {
+        return http.Response.bytes(bytes, 200, headers: {'content-type': 'application/octet-stream'});
+      });
+
+      final client = SleekHttpClient(
+        client: mockClient,
+        authorityGetter: () => 'api.example.com',
+      );
+
+      final result = await client.send<BytesBody>(HttpMethod.get, '/file');
+      expect(result.mimeType, 'application/octet-stream');
+      expect(result.bytes, bytes);
+    });
+
+    test('send() without an explicit type argument resolves to null and ignores the body', () async {
+      final mockClient = MockClient((request) async => http.Response('ignored', 200));
+
+      final client = SleekHttpClient(
+        client: mockClient,
+        authorityGetter: () => 'api.example.com',
+      );
+
+      final result = await client.send(HttpMethod.get, '/anything');
+      expect(result, isNull);
+    });
+
+    test('send<int>() throws UnimplementedError for an unsupported response type', () async {
+      final mockClient = MockClient((request) async => http.Response('42', 200));
+
+      final client = SleekHttpClient(
+        client: mockClient,
+        authorityGetter: () => 'api.example.com',
+      );
+
+      expect(
+        () => client.send<int>(HttpMethod.get, '/number'),
+        throwsA(isA<UnimplementedError>()),
+      );
+    });
+
+    test(
+      'the JSON decode is cached and reused between an interceptor and the final parsed result',
+      () async {
+        // A custom interceptor decodes the body itself (e.g. to inspect/log
+        // it) before the response reaches SleekHttpClient's own parsing.
+        // Both decodes should return the exact same Map instance, proving
+        // the Expando cache on http.Response (not a fresh json.decode) was
+        // used the second time around.
+        JsonObject? decodedByInterceptor;
+
+        final mockClient = MockClient((request) async {
+          return http.Response(
+            json.encode({'id': 1, 'name': 'Ada'}),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        });
+
+        final client = SleekHttpClient(
+          client: mockClient,
+          authorityGetter: () => 'api.example.com',
+          interceptors: [_DecodingSpyInterceptor((response) => decodedByInterceptor = response.tryDecodeJson<JsonObject>())],
+        );
+
+        final result = await client.send<JsonObject>(HttpMethod.get, '/users/1');
+
+        expect(result, {'id': 1, 'name': 'Ada'});
+        expect(decodedByInterceptor, isNotNull);
+        expect(
+          identical(result, decodedByInterceptor),
+          isTrue,
+          reason: 'the interceptor and the final parse must share the same cached decode',
+        );
+      },
+    );
+
     test('send<JsonObject>() throws NullResponseBodyException on a literal JSON null body', () async {
       final mockClient = MockClient((request) async {
         return http.Response('null', 200, headers: {'content-type': 'application/json; charset=utf-8'});
@@ -303,6 +411,22 @@ void main() {
 
 class _CustomException extends HttpResponseException {
   _CustomException(super.response);
+}
+
+/// Test-only interceptor that inspects (and JSON-decodes) the response
+/// after it comes back, without altering it — used to verify the decoded
+/// JSON is cached and shared with SleekHttpClient's own subsequent parsing.
+class _DecodingSpyInterceptor implements HttpInterceptor {
+  _DecodingSpyInterceptor(this._onResponse);
+
+  final void Function(http.Response response) _onResponse;
+
+  @override
+  Future<http.Response> intercept(http.BaseRequest request, HttpInterceptorChain chain) async {
+    final response = await chain.proceed(request);
+    _onResponse(response);
+    return response;
+  }
 }
 
 

@@ -53,6 +53,61 @@ void main() {
 
       expect(response.tryDecodeJson<JsonObject>(), isNull);
     });
+
+    test('decodeJson decodes a valid JSON object body', () {
+      final response = http.Response('{"id": 1, "name": "Ada"}', 200);
+
+      expect(response.decodeJson<JsonObject>(), {'id': 1, 'name': 'Ada'});
+    });
+
+    test('decodeJson decodes a valid JSON list body', () {
+      final response = http.Response('[1, 2, 3]', 200);
+
+      expect(response.decodeJson<JsonList>(), [1, 2, 3]);
+    });
+
+    test('decodeJson throws FormatException on malformed JSON', () {
+      final response = http.Response('not json', 200);
+
+      expect(() => response.decodeJson<JsonObject>(), throwsFormatException);
+    });
+
+    test('decodeJson throws TypeError on an unexpected JSON shape', () {
+      final response = http.Response('[1, 2, 3]', 200);
+
+      expect(() => response.decodeJson<JsonObject>(), throwsA(isA<TypeError>()));
+    });
+
+    test('decodeJson caches the decoded result per response instance', () {
+      final response = http.Response('{"id": 1}', 200);
+
+      // Same instance returned on every call: proves json.decode only ran
+      // once and the second call reused the cached result instead of
+      // producing a fresh Map.
+      expect(
+        identical(response.decodeJson<JsonObject>(), response.decodeJson<JsonObject>()),
+        isTrue,
+      );
+    });
+
+    test('decodeJson and tryDecodeJson share the same cache', () {
+      final response = http.Response('{"id": 1}', 200);
+
+      final fromDecodeJson = response.decodeJson<JsonObject>();
+      final fromTryDecodeJson = response.tryDecodeJson<JsonObject>();
+
+      expect(identical(fromDecodeJson, fromTryDecodeJson), isTrue);
+    });
+
+    test('tryDecodeJson does not cache a failed decode (each call may re-attempt)', () {
+      final response = http.Response('not json', 200);
+
+      // Both calls independently swallow the FormatException and return
+      // null - nothing to assert about caching here beyond "it still works"
+      // since a failed decode is deliberately not cached.
+      expect(response.tryDecodeJson<JsonObject>(), isNull);
+      expect(response.tryDecodeJson<JsonObject>(), isNull);
+    });
   });
 }
 

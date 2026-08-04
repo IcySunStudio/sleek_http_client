@@ -245,7 +245,7 @@ class SleekHttpClient {
 
   Future<T> _sendHandledRequest<T>(http.BaseRequest request) async {
     final response = await runInterceptorChain(request, _effectiveInterceptors, _sendRequest);
-    return _ResponseHandler(response).parseAs<T>(errorBuilder: errorBuilder);
+    return _ResponseHandler<T>(response, errorBuilder: errorBuilder).parse();
   }
 
   /// Builds the interceptor list actually used to send requests: [interceptors]
@@ -371,24 +371,31 @@ class _AuthHeaderInterceptor implements HttpInterceptor {
   }
 }
 
-class _ResponseHandler {
-  _ResponseHandler(this.response) : isSuccess = SleekHttpClient.isStatusCodeSuccess(response.statusCode);
+class _ResponseHandler<T> {
+  _ResponseHandler(this.response, {this.errorBuilder})
+      : isSuccess = SleekHttpClient.isStatusCodeSuccess(response.statusCode);
 
   final http.Response response;
 
+  final HttpClientErrorBuilder? errorBuilder;
+
   final bool isSuccess;
 
-  late final String bodyString = response.body;
-
-  T bodyJson<T>() => json.decode(bodyString) as T;
-
-  T parseAs<T>({HttpClientErrorBuilder? errorBuilder}) {
+  /// Parses [response] as [T], or throws — an [HttpResponseException] (or
+  /// the [errorBuilder]-provided exception) for a non-2xx response, or a
+  /// [NullResponseBodyException] / [UnimplementedError] for a shape
+  /// mismatch on a success response.
+  ///
+  /// A method, not a getter/field: it does real work (JSON decoding) and can
+  /// throw, both properties out of place for a plain property access.
+  T parse() {
     if (isSuccess) {
-      if (T == String) return bodyString as T;
+      if (T == String) return response.body as T;
       if (T == JsonObject || T == JsonList || T == _typeOf<JsonObject?>() || T == _typeOf<JsonList?>()) {
         // Malformed JSON (`FormatException`) or an unexpected shape, e.g. a list where an object was expected (`TypeError`), is a server
-        // contract violation and is deliberately left to propagate here, rather than being silently swallowed to `null`.
-        final decoded = bodyJson<T?>();
+        // contract violation and is deliberately left to propagate here (decodeJson throws), rather than being silently
+        // swallowed to `null` (which is what tryDecodeJson, used in the error branch below, does).
+        final decoded = response.decodeJson<T?>();
         if (decoded == null && null is! T) {
           // T is a non-nullable request (e.g. `send<JsonObject>()`), but the server returned a literal JSON `null`
           // — surface this distinctly instead of a confusing cast failure.
@@ -407,7 +414,7 @@ class _ResponseHandler {
     } else {
       // The response is already known to be an HTTP error, and it may not carry a JSON body at all (plain text,
       // HTML error page, empty body, ...) — a secondary parsing failure here must not mask the real
-      // [HttpResponseException], hence the best-effort `tryDecodeJson` instead of `bodyJson`.
+      // [HttpResponseException], hence the best-effort `tryDecodeJson` instead of `decodeJson`.
       final parsed = response.isJson ? response.tryDecodeJson<JsonObject>() : null;
       throw errorBuilder?.call(response, parsed) ?? HttpResponseException(response, parsed);
     }
