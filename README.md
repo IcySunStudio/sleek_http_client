@@ -180,7 +180,11 @@ Pass a `LoggingInterceptor` to control what gets logged. Place it **last** in
 `interceptors` so only real network calls are logged (not short-circuits from
 earlier interceptors, e.g. a cache hit). For Flutter apps, a common setup is
 to use `debugPrint` as the logger, skip headers (which may contain sensitive
-tokens), and only include bodies outside of release mode:
+tokens), and only include bodies outside of release mode.
+
+Exceptions thrown instead of a response (no internet, timeout, DNS /
+connection failure, ...) are logged too, on a `❌` line, then rethrown
+unchanged.
 
 ```dart
 import 'package:flutter/foundation.dart';

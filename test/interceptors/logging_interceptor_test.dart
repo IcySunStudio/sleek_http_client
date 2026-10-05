@@ -1,4 +1,5 @@
 import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:sleek_http_client/sleek_http_client.dart';
 import 'package:test/test.dart';
 
@@ -66,6 +67,45 @@ void main() {
       );
 
       expect(messages[0], contains('x-test'));
+    });
+
+    test('logs an exception thrown down the chain, then rethrows it unchanged', () async {
+      final messages = <String>[];
+      final interceptor = LoggingInterceptor(logger: messages.add);
+      const error = ConnectivityException(ConnectivityExceptionType.timeout);
+
+      await expectLater(
+        runInterceptorChain(
+          http.Request('GET', Uri.parse('https://example.com/users/1')),
+          [interceptor],
+          (request) async => throw error,
+        ),
+        throwsA(same(error)),
+      );
+
+      expect(messages, hasLength(2));
+      expect(messages[0], contains('⬆️'));
+      expect(messages[1], contains('❌'));
+      expect(messages[1], contains('GET'));
+      expect(messages[1], contains('https://example.com/users/1'));
+      expect(messages[1], contains('ConnectivityException(timeout)'));
+    });
+
+    test('logs a ConnectivityException when offline, end-to-end through SleekHttpClient', () async {
+      final messages = <String>[];
+
+      final client = SleekHttpClient(
+        client: MockClient((request) async => http.Response('ok', 200)),
+        authorityGetter: () => 'api.example.com',
+        isOnlineChecker: () async => false,
+        interceptors: [LoggingInterceptor(logger: messages.add)],
+      );
+
+      await expectLater(client.send<String>(HttpMethod.get, '/users/1'), throwsA(isA<ConnectivityException>()));
+
+      expect(messages, hasLength(2));
+      expect(messages[1], contains('❌'));
+      expect(messages[1], contains('ConnectivityException(noInternet)'));
     });
   });
 }

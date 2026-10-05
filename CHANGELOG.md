@@ -1,6 +1,7 @@
 # Changelog
 
-## 1.1.1
+## 1.2.0
+- `LoggingInterceptor` now also logs exceptions thrown down the chain instead of a response (no internet, timeout, DNS / connection failure, ...) on a `❌` line, then rethrows them unchanged.
 - Fixed `send<void>()` / `send<Null>()` / `send<Object?>()` throwing `UnimplementedError` (after the request was processed by the server) instead of resolving to `null`.
 - Fixed the timeout not covering the request sending phase (only the body reading): a server that never sent its headers could block a request until the OS-level TCP timeout.
 - Fixed a deadlock in `TokenRefreshInterceptor` when the refresh callback sends its request through the same client after an `await` (or behind an asynchronous interceptor): requests to `excludedPaths` no longer wait for the in-flight refresh.

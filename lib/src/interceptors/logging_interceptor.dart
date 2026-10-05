@@ -7,7 +7,14 @@ import '../sleek_http_client.dart' show SleekHttpClient;
 import '../types.dart';
 import 'interceptor.dart';
 
-/// Logs every request and response passing through the chain.
+/// Logs every request and response passing through the chain, as well as any
+/// exception thrown further down the chain instead of a response (e.g. no
+/// internet, timeout, DNS / connection failure). The exception is rethrown
+/// unchanged.
+///
+/// Non-2xx responses are logged as regular responses (with their status code),
+/// and response parsing errors occur after the chain, so neither is logged as
+/// an error here.
 ///
 /// Place it last in [SleekHttpClient.interceptors] (the innermost position,
 /// closest to the actual network call) so that it only logs real network
@@ -44,7 +51,14 @@ class LoggingInterceptor implements HttpInterceptor {
   @override
   Future<http.Response> intercept(http.BaseRequest request, HttpInterceptorChain chain) async {
     _logRequest(request);
-    final response = await chain.proceed(request);
+    final http.Response response;
+    try {
+      response = await chain.proceed(request);
+    } catch (e) {
+      // e.g. no internet, timeout, DNS / connection failure: without this, the request log line would have no follow-up.
+      _logError(request, e);
+      rethrow;
+    }
     _logResponse(response);
     return response;
   }
@@ -106,7 +120,18 @@ class LoggingInterceptor implements HttpInterceptor {
     );
   }
 
-  /// Builds a single log message, shared by both request and response logging.
+  void _logError(http.BaseRequest request, Object error) {
+    logger(
+      _buildMessage(
+        symbol: '❌',
+        method: request.method,
+        url: request.url.toString(),
+        body: '$error',
+      ),
+    );
+  }
+
+  /// Builds a single log message, shared by request, response and error logging.
   String _buildMessage({
     required String symbol,
     required String? method,
