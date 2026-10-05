@@ -159,7 +159,7 @@ logging, the real network call).
 `JsonObject`/`JsonList`, `T`'s own nullability controls what happens when the
 server returns a `null` body:
 
-| Type argument | Returns | If the body is JSON `null` |
+| Type argument | Returns | If the body is JSON `null` or empty |
 |---|---|---|
 | `JsonObject` | `Map<String, dynamic>` | throws `NullResponseBodyException` |
 | `JsonObject?` | `Map<String, dynamic>?` | `null` |
@@ -167,12 +167,12 @@ server returns a `null` body:
 | `JsonList?` | `List<dynamic>?` | `null` |
 | `String` | Raw response body string (never null) | — |
 | `BytesBody` | Raw bytes + MIME type (never null) | — |
-| *(omitted / `dynamic`)* | `null` — body is ignored | — |
+| *(omitted / `void` / `Null` / `Object?` / `dynamic`)* | `null` — body is ignored | — |
 
 A malformed body, or JSON of the wrong shape (e.g. a list where an object was
 expected), always throws — `FormatException` / `TypeError` respectively —
-regardless of nullability: only an explicit JSON `null` is treated as a
-legitimate value.
+regardless of nullability: only an explicit JSON `null` (or an empty body,
+e.g. `204 No Content`) is treated as a legitimate value.
 
 ## Logging
 

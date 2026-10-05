@@ -85,6 +85,19 @@ void main() {
       expect(result, isNull);
     });
 
+    test('send<void>(), send<Null>() and send<Object?>() resolve to null and ignore the body', () async {
+      final mockClient = MockClient((request) async => http.Response('ignored', 200));
+
+      final client = SleekHttpClient(
+        client: mockClient,
+        authorityGetter: () => 'api.example.com',
+      );
+
+      await expectLater(client.send<void>(HttpMethod.delete, '/anything'), completes);
+      expect(await client.send<Null>(HttpMethod.get, '/anything'), isNull);
+      expect(await client.send<Object?>(HttpMethod.get, '/anything'), isNull);
+    });
+
     test('send<int>() throws UnimplementedError for an unsupported response type', () async {
       final mockClient = MockClient((request) async => http.Response('42', 200));
 
@@ -167,6 +180,36 @@ void main() {
       expect(result, isNull);
     });
 
+    test('send<JsonObject?>() and send<JsonList?>() resolve to null on an empty body', () async {
+      final mockClient = MockClient((request) async => http.Response('', 204));
+
+      final client = SleekHttpClient(
+        client: mockClient,
+        authorityGetter: () => 'api.example.com',
+      );
+
+      expect(await client.send<JsonObject?>(HttpMethod.get, '/users/1'), isNull);
+      expect(await client.send<JsonList?>(HttpMethod.get, '/items'), isNull);
+    });
+
+    test('send<JsonObject>() throws NullResponseBodyException on an empty body', () async {
+      final mockClient = MockClient((request) async {
+        return http.Response('', 200, headers: {'content-type': 'application/json; charset=utf-8'});
+      });
+
+      final client = SleekHttpClient(
+        client: mockClient,
+        authorityGetter: () => 'api.example.com',
+      );
+
+      expect(
+        () => client.send<JsonObject>(HttpMethod.get, '/users/1'),
+        throwsA(
+          isA<NullResponseBodyException>().having((e) => e.expectedType, 'expectedType', JsonObject),
+        ),
+      );
+    });
+
     test('send<JsonObject>() throws FormatException on a malformed JSON body', () async {
       final mockClient = MockClient((request) async {
         return http.Response('not json', 200, headers: {'content-type': 'application/json; charset=utf-8'});
@@ -232,6 +275,25 @@ void main() {
         () => client.send<JsonObject>(HttpMethod.get, '/users/1'),
         throwsA(
           isA<ConnectivityException>().having((e) => e.type, 'type', ConnectivityExceptionType.noInternet),
+        ),
+      );
+    });
+
+    test('throws a timeout ConnectivityException when the server never sends its headers', () async {
+      // The response future never completes: `_client.send` itself hangs, not just the body reading.
+      final mockClient = MockClient((request) => Completer<http.Response>().future);
+
+      final client = SleekHttpClient(
+        client: mockClient,
+        authorityGetter: () => 'api.example.com',
+        timeOutDuration: const Duration(milliseconds: 100),
+      );
+
+      await expectLater(
+        // Outer guard, so a regression fails the test instead of hanging it.
+        client.send<String>(HttpMethod.get, '/slow').timeout(const Duration(seconds: 2)),
+        throwsA(
+          isA<ConnectivityException>().having((e) => e.type, 'type', ConnectivityExceptionType.timeout),
         ),
       );
     });

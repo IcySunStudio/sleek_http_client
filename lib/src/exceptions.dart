@@ -39,8 +39,8 @@ class HttpResponseException implements Exception {
 /// Builder that creates a custom [HttpResponseException] from a response.
 typedef HttpClientErrorBuilder = HttpResponseException Function(http.Response response, Map<String, dynamic>? responseJson);
 
-/// Thrown when a successful (2xx) response body is the JSON literal `null`,
-/// but the caller requested a non-nullable type, e.g. `send<JsonObject>()`.
+/// Thrown when a successful (2xx) response body is the JSON literal `null` (or
+/// empty), but the caller requested a non-nullable type, e.g. `send<JsonObject>()`.
 ///
 /// Use the nullable form of the type argument (e.g. `send<JsonObject?>()`)
 /// if a `null` body is a legitimate, expected outcome for that call.
@@ -53,5 +53,5 @@ class NullResponseBodyException implements Exception {
   @override
   String toString() =>
       'NullResponseBodyException: expected a non-null $expectedType response body, '
-      'but the server returned JSON `null`. Use send<$expectedType?>() if a null body is expected.';
+      'but the server returned JSON `null` (or an empty body). Use send<$expectedType?>() if a null body is expected.';
 }

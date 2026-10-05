@@ -91,6 +91,53 @@ void main() {
       expect(refreshCallCount, 1);
     });
 
+    group('does not deadlock when the refresh callback sends its request through the same chain', () {
+      // The refresh request is sent once the refresh task is already registered as in-flight: it must not pause on it.
+      Future<http.Response> run({required bool awaitBeforeRefreshRequest, required bool asyncOuterInterceptor}) {
+        var token = 'stale';
+        late final List<HttpInterceptor> interceptors;
+
+        Future<http.Response> terminal(http.BaseRequest request) async {
+          if (request.url.path == '/auth/refresh') return http.Response('{}', 200, request: request);
+          return token == 'fresh'
+              ? http.Response('ok', 200, request: request)
+              : http.Response('unauthorized', 401, request: request);
+        }
+
+        interceptors = [
+          if (asyncOuterInterceptor) _AsyncPassThroughInterceptor(),
+          TokenRefreshInterceptor(
+            () async {
+              if (awaitBeforeRefreshRequest) await Future<void>.delayed(Duration.zero);
+              await runInterceptorChain(
+                http.Request('POST', Uri.parse('https://example.com/auth/refresh')),
+                interceptors,
+                terminal,
+              );
+              token = 'fresh';
+            },
+            excludedPaths: ['/auth/refresh'],
+          ),
+        ];
+
+        return runInterceptorChain(
+          http.Request('GET', Uri.parse('https://example.com/users/me')),
+          interceptors,
+          terminal,
+        ).timeout(const Duration(seconds: 2)); // Outer guard, so a regression fails the test instead of hanging it.
+      }
+
+      test('when the refresh callback awaits before sending the refresh request', () async {
+        final response = await run(awaitBeforeRefreshRequest: true, asyncOuterInterceptor: false);
+        expect(response.statusCode, 200);
+      });
+
+      test('when an asynchronous interceptor precedes TokenRefreshInterceptor', () async {
+        final response = await run(awaitBeforeRefreshRequest: false, asyncOuterInterceptor: true);
+        expect(response.statusCode, 200);
+      });
+    });
+
     test('surfaces the error when the retry also fails', () async {
       final interceptor = TokenRefreshInterceptor(
         () async {},
@@ -180,3 +227,11 @@ void main() {
 }
 
 
+/// Passes the request through after an asynchronous gap, like a real-world interceptor would (e.g. a disk-cache lookup).
+class _AsyncPassThroughInterceptor implements HttpInterceptor {
+  @override
+  Future<http.Response> intercept(http.BaseRequest request, HttpInterceptorChain chain) async {
+    await Future<void>.delayed(Duration.zero);
+    return chain.proceed(request);
+  }
+}

@@ -31,6 +31,8 @@ import 'interceptor.dart';
 /// request pauses until the refresh completes before being sent, so it picks
 /// up the fresh token and avoids a wasted 401 round-trip. (The fresh token
 /// itself is attached by [SleekHttpClient] right before every network call.)
+/// Requests to [excludedPaths] never pause, so the refresh callback can call
+/// the refresh endpoint through the same client without deadlocking.
 ///
 /// ## 401 detection with loop prevention
 ///
@@ -63,16 +65,18 @@ class TokenRefreshInterceptor implements HttpInterceptor {
 
   @override
   Future<http.Response> intercept(http.BaseRequest request, HttpInterceptorChain chain) async {
+    // Excluded requests bypass this interceptor entirely, including the pre-send pause: the refresh request itself, sent from
+    // within the refresh callback, would otherwise wait for the very refresh it is part of — a deadlock.
+    final path = request.url.path;
+    final isExcluded = excludedPaths.any((p) => path.contains(p));
+    if (isExcluded) return chain.proceed(request);
+
     // Pause here if a refresh is already in progress, so this request is sent with the fresh token instead of a known-stale one.
     await (_task ?? Future.value());
 
     final response = await chain.proceed(request);
 
     if (response.statusCode != 401) return response;
-
-    final path = request.url.path;
-    final isExcluded = excludedPaths.any((p) => path.contains(p));
-    if (isExcluded) return response;
 
     // De-duplicate concurrent refreshes.
     _task ??= _refresh().whenComplete(() => _task = null);

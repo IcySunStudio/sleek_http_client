@@ -31,7 +31,7 @@ export 'types.dart';
 class SleekHttpClient {
   SleekHttpClient({
     http.Client? client,
-    required this.authorityGetter,
+    required this.authorityGetter,    // TODO make it optional : one could override it at each call. But throw error if not set when making a request.
     this.basePath = '',
     this.headersGetter,
     this.authorizationHeaderGetter,
@@ -142,7 +142,8 @@ class SleekHttpClient {
   ///
   /// For [JsonObject] / [JsonList], `T` itself controls null-tolerance: use
   /// `send<JsonObject>(...)` to require a non-null body (throws
-  /// [NullResponseBodyException] if the server returns JSON `null`), or
+  /// [NullResponseBodyException] if the server returns JSON `null` or an
+  /// empty body), or
   /// `send<JsonObject?>(...)` if a `null` body is a legitimate outcome.
   Future<T> send<T>(
     HttpMethod method,
@@ -286,8 +287,11 @@ class SleekHttpClient {
     await throwIfOffline();
 
     try {
-      final streamed = await _client.send(request);
-      return await http.Response.fromStream(streamed).timeout(timeOutDuration);
+      // The timeout covers both sending (until headers are received) and reading the full body.
+      return await (() async {
+        final streamed = await _client.send(request);
+        return http.Response.fromStream(streamed);
+      }()).timeout(timeOutDuration);
     } on TimeoutException {
       throw const ConnectivityException(ConnectivityExceptionType.timeout);
     }
@@ -395,10 +399,11 @@ class _ResponseHandler<T> {
         // Malformed JSON (`FormatException`) or an unexpected shape, e.g. a list where an object was expected (`TypeError`), is a server
         // contract violation and is deliberately left to propagate here (decodeJson throws), rather than being silently
         // swallowed to `null` (which is what tryDecodeJson, used in the error branch below, does).
-        final decoded = response.decodeJson<T?>();
+        // An empty body (e.g. 204 No Content) is treated like a literal JSON `null`.
+        final decoded = response.bodyBytes.isEmpty ? null : response.decodeJson<T?>();
         if (decoded == null && null is! T) {
-          // T is a non-nullable request (e.g. `send<JsonObject>()`), but the server returned a literal JSON `null`
-          // — surface this distinctly instead of a confusing cast failure.
+          // T is a non-nullable request (e.g. `send<JsonObject>()`), but the server returned a literal JSON `null` (or an
+          // empty body) — surface this distinctly instead of a confusing cast failure.
           throw NullResponseBodyException(T);
         }
         return decoded as T;
