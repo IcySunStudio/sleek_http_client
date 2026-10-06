@@ -31,7 +31,7 @@ export 'types.dart';
 class SleekHttpClient {
   SleekHttpClient({
     http.Client? client,
-    required this.authorityGetter,    // TODO make it optional : one could override it at each call. But throw error if not set when making a request.
+    this.authorityGetter,
     this.basePath = '',
     this.headersGetter,
     this.authorizationHeaderGetter,
@@ -55,8 +55,11 @@ class SleekHttpClient {
   /// environments where connectivity_plus is unavailable, e.g. pure Dart CLI).
   final Future<bool> Function()? _isOnlineChecker;
 
-  /// Returns the authority (host) used for every request, e.g. `api.example.com`.
-  final String Function() authorityGetter;
+  /// Returns the default authority (host) used for requests, e.g. `api.example.com`.
+  ///
+  /// Optional: when `null`, every request must pass its own `authority`,
+  /// otherwise a [StateError] is thrown when the request URI is built.
+  final String Function()? authorityGetter;
 
   /// Optional path prefix added before every request path, e.g. `/v1`.
   final String basePath;
@@ -111,15 +114,21 @@ class SleekHttpClient {
   /// Builds a `https` [Uri] from [path] and optional [queryParameters].
   ///
   /// [authority] overrides [authorityGetter] for this single call.
+  ///
+  /// Throws a [StateError] if neither [authority] nor [authorityGetter] is set.
   Uri buildUriFromPath(
     String path, [
     JsonObject? queryParameters,
     String? authority,
-  ]) => Uri.https(
-    authority ?? authorityGetter(),
-    '$basePath$path',
-    queryParameters,
-  );
+  ]) {
+    final resolvedAuthority = authority ?? authorityGetter?.call();
+    if (resolvedAuthority == null) {
+      throw StateError(
+        'No authority set: pass `authority` to this call or set `authorityGetter` on SleekHttpClient.',
+      );
+    }
+    return Uri.https(resolvedAuthority, '$basePath$path', queryParameters);
+  }
 
   /// Returns headers that are suitable for an authorized request (base headers
   /// + authorization header).
@@ -175,15 +184,18 @@ class SleekHttpClient {
   /// Builds and sends a multipart request (file upload).
   ///
   /// Currently only supports files referenced by a local file-system path.
+  ///
+  /// [authority] overrides [authorityGetter] for this single call.
   Future<T> sendMultipartRequest<T>(
     String path, {
+    String? authority,
     Map<String, String>? headers,
     Map<String, String>? fields,
     required List<MultipartRequestFileData> files,
   }) async {
     final request = _RetryableMultipartRequest(
       HttpMethod.post.toString(),
-      buildUriFromPath(path),
+      buildUriFromPath(path, null, authority),
       filesData: files,
     );
 

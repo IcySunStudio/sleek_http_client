@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.0
+- `authorityGetter` is now optional: the authority can be passed per call instead. A `StateError` is thrown when a request is built with neither.
+- `sendMultipartRequest` now accepts a per-call `authority`, like `send`.
+
 ## 1.2.0
 - `LoggingInterceptor` now also logs exceptions thrown down the chain instead of a response (no internet, timeout, DNS / connection failure, ...) on a `❌` line, then rethrows them unchanged.
 - Fixed `send<void>()` / `send<Null>()` / `send<Object?>()` throwing `UnimplementedError` (after the request was processed by the server) instead of resolving to `null`.

@@ -43,6 +43,9 @@ await client.send(
   bodyJson: {'title': 'Hello'},
 );
 
+// `authorityGetter` is optional: pass `authority` per call instead (a StateError is thrown if neither is set)
+await client.send(HttpMethod.get, '/health', authority: 'status.example.com');
+
 // File upload
 await client.sendMultipartRequest(
   '/upload',

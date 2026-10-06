@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -468,6 +469,61 @@ void main() {
         expect(seenTokensAtNetworkTime.skip(1), everyElement('Bearer fresh-token'));
       },
     );
+  });
+
+  group('authority', () {
+    final okClient = MockClient((request) async => http.Response('{}', 200));
+
+    test('without authorityGetter, requests without authority throw a StateError', () async {
+      final client = SleekHttpClient(client: okClient);
+
+      expect(() => client.buildUriFromPath('/x'), throwsStateError);
+      expect(() => client.send<JsonObject>(HttpMethod.get, '/x'), throwsStateError);
+      expect(
+        () => client.sendMultipartRequest<JsonObject>('/x', files: []),
+        throwsStateError,
+      );
+    });
+
+    test('without authorityGetter, a per-call authority is used by send', () async {
+      Uri? seenUrl;
+      final client = SleekHttpClient(
+        client: MockClient((request) async {
+          seenUrl = request.url;
+          return http.Response('{}', 200);
+        }),
+      );
+
+      await client.send<JsonObject>(HttpMethod.get, '/x', authority: 'other.example.com');
+      expect(seenUrl.toString(), 'https://other.example.com/x');
+    });
+
+    test('without authorityGetter, a per-call authority is used by sendMultipartRequest', () async {
+      Uri? seenUrl;
+      final client = SleekHttpClient(
+        client: MockClient((request) async {
+          seenUrl = request.url;
+          return http.Response('{}', 200);
+        }),
+      );
+
+      final file = File('${Directory.systemTemp.path}/sleek_http_client_authority_test.txt')..writeAsStringSync('data');
+      addTearDown(file.deleteSync);
+
+      await client.sendMultipartRequest<JsonObject>(
+        '/upload',
+        authority: 'other.example.com',
+        files: [MultipartRequestFileData(fieldName: 'file', path: file.path)],
+      );
+      expect(seenUrl.toString(), 'https://other.example.com/upload');
+    });
+
+    test('a per-call authority takes precedence over authorityGetter', () async {
+      final client = SleekHttpClient(client: okClient, authorityGetter: () => 'default.example.com');
+
+      expect(client.buildUriFromPath('/x').host, 'default.example.com');
+      expect(client.buildUriFromPath('/x', null, 'other.example.com').host, 'other.example.com');
+    });
   });
 }
 
