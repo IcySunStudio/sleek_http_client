@@ -11,7 +11,7 @@ A lightweight, pure-Dart HTTP client built on top of [`package:http`](https://pu
 | **Interceptor chain** | Composable `HttpInterceptor` chain — retry, token refresh, logging, caching, ... |
 | **Token refresh** | `TokenRefreshInterceptor`: automatic 401 retry with de-duplicated refresh, shared across concurrent requests |
 | **Multipart upload** | `sendMultipartRequest` with transparent retry support |
-| **Logging** | `LoggingInterceptor` for request/response bodies and headers |
+| **Logging** | `LoggingInterceptor`: one readable line per call (status icon, duration, bodies, optional headers) |
 | **Timeout** | Configurable `timeOutDuration` (default 30 s) |
 
 ## Getting started

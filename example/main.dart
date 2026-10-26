@@ -147,6 +147,7 @@ Future<void> _scenario3RetryAfter401WithConcurrentRequests() async {
       LoggingInterceptor(
         logger: _printIndented,
         logHeaders: true,
+        logRequests: true,   // Also log each request when sent, to see B and C start while A is being retried
       ),
     ],
   );

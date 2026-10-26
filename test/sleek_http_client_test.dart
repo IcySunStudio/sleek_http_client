@@ -346,8 +346,8 @@ void main() {
       expect(result, {'ok': true});
       expect(attempt, 2);
       expect(refreshCallCount, 1);
-      // 2 attempts × (request + response) = 4 log lines.
-      expect(logs, hasLength(4));
+      // 2 attempts × 1 log line (response).
+      expect(logs, hasLength(2));
     });
 
     test('sends the freshest auth header on every attempt', () async {
