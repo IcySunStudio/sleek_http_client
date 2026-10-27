@@ -1,8 +1,8 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import '../http_response_extensions.dart';
 import '../sleek_http_client.dart' show SleekHttpClient;
 import '../types.dart';
 import 'interceptor.dart';
@@ -112,7 +112,7 @@ class LoggingInterceptor implements HttpInterceptor {
   final LogLayout layout;
 
   /// Marker put at the very start of every log line, to spot them among
-  /// other logs. `null` removes it (and the space following it).
+  /// other logs. `null` or empty removes it (and the space following it).
   final String? leading;
 
   /// Builds the label displayed between brackets on every log line, for the
@@ -145,7 +145,7 @@ class LoggingInterceptor implements HttpInterceptor {
       response = await chain.proceed(request);
     } catch (e) {
       // e.g. no internet, timeout, DNS / connection failure: without this, the failed call would not be logged at all.
-      _logError(request, e, stopwatch.elapsed);
+      _logError(request, e, requestBody, stopwatch.elapsed);
       rethrow;
     }
     _logResponse(request, response, requestBody, stopwatch.elapsed);
@@ -206,12 +206,25 @@ class LoggingInterceptor implements HttpInterceptor {
     );
   }
 
-  void _logError(http.BaseRequest request, Object error, Duration elapsed) {
+  void _logError(http.BaseRequest request, Object error, String requestBody, Duration elapsed) {
+    final isMultiline = layout == LogLayout.multiline;
+
+    // The request body and headers are shown here only if they were not already logged by [_logRequest].
+    final shownRequestBody = logRequests ? '' : requestBody;
+
     logger(
       _buildMessage(
         request,
         icon: '❌',
-        details: ['${elapsed.inMilliseconds} ms', '$error'],
+        details: [
+          '${elapsed.inMilliseconds} ms',
+          if (!isMultiline && shownRequestBody.isNotEmpty) '⬆️ $shownRequestBody',
+          '$error',
+        ],
+        extraLines: [
+          if (isMultiline && shownRequestBody.isNotEmpty) '⬆️ $shownRequestBody',
+          if (logHeaders && !logRequests) '⬆️ headers: ${request.headers}',
+        ],
       ),
     );
   }
@@ -229,7 +242,7 @@ class LoggingInterceptor implements HttpInterceptor {
     final label = labelBuilder != null ? labelBuilder!(request) : _hostOf(request.url);
 
     final buffer = StringBuffer();
-    if (leading != null) buffer.write('$leading ');
+    if (leading != null && leading!.isNotEmpty) buffer.write('$leading ');
     if (label != null && label.isNotEmpty) buffer.write('[$label] ');
     buffer.write('$icon ');
     if (status != null) buffer.write('$status ');
@@ -277,24 +290,39 @@ class LoggingInterceptor implements HttpInterceptor {
       })}',
       _ => '',
     };
-    return _truncate(body.removeAllNewLines());
+    return _clean(body);
   }
 
   String _responseBody(http.Response response) {
     if (!includeBody) return '';
 
-    final isBodyJson = ContentType.parse(
-      response.headers[HttpHeaders.contentTypeHeader] ?? '',
-    ).mimeType == SleekHttpClient.contentTypeJsonMimeType;
-
-    if (isBodyJson) return _truncate(response.body.removeAllNewLines());
+    if (response.isJson) return _clean(response.body);
 
     final sizeKb = ((response.contentLength ?? 0) / 1024).round();
-    return sizeKb <= 10 ? _truncate(response.body.removeAllNewLines()) : '$sizeKb kb';
+    return sizeKb <= 10 ? _clean(response.body) : '$sizeKb kb';
   }
 
-  String _truncate(String body) {
+  /// Removes the newlines, then cuts the result to [maxBodyLength] characters,
+  /// ending with `…`.
+  ///
+  /// Scanning stops once the limit is reached, so a huge body is not entirely processed.
+  String _clean(String body) {
     final max = maxBodyLength;
-    return max == null || body.length <= max ? body : '${body.substring(0, max)}…';
+    if (max == null) return body.removeAllNewLines();
+
+    final buffer = StringBuffer();
+    var length = 0;
+    for (var i = 0; i < body.length; i++) {
+      final char = body[i];
+      if (char == '\n' || char == '\r') continue;
+
+      if (length == max) {
+        buffer.write('…');
+        break;
+      }
+      buffer.write(char);
+      length++;
+    }
+    return buffer.toString();
   }
 }

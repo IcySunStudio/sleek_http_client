@@ -288,16 +288,69 @@ void main() {
             const error = ConnectivityException(ConnectivityExceptionType.timeout);
 
             await expectLater(
-              runInterceptorChain(_post('{"note":4}'), [interceptor], (request) async => throw error),
+              runInterceptorChain(_get(), [interceptor], (request) async => throw error),
               throwsA(same(error)),
             );
 
             expect(messages, hasLength(1));
-            expect(messages.single, startsWith('🌐 [example.com] ❌ POST /reviews · '));
+            expect(messages.single, startsWith('🌐 [example.com] ❌ GET /users/1 · '));
             expect(messages.single, matches(RegExp(r'· \d+ ms · ConnectivityException\(timeout\)$')));
+          });
+
+          test('logs the request body and headers on a ❌ line, unless logRequests already did', () async {
+            for (final logRequests in [false, true]) {
+              final messages = <String>[];
+              final interceptor = LoggingInterceptor(
+                logger: messages.add,
+                layout: layout,
+                logHeaders: true,
+                logRequests: logRequests,
+              );
+              final request = _post('{"note":4}')..headers['x-test'] = 'abc';
+
+              await expectLater(
+                runInterceptorChain(request, [interceptor], (request) async => throw StateError('boom')),
+                throwsStateError,
+              );
+
+              final errorMessage = messages.last;
+              expect(errorMessage, contains('❌ POST /reviews · '), reason: 'logRequests: $logRequests');
+              expect(errorMessage, contains('Bad state: boom'), reason: 'logRequests: $logRequests');
+              expect(errorMessage.contains('{"note":4}'), !logRequests, reason: 'logRequests: $logRequests');
+              expect(errorMessage.contains('x-test'), !logRequests, reason: 'logRequests: $logRequests');
+            }
           });
         });
       }
+
+      test('multiline: the request body and headers follow the ❌ line', () async {
+        final messages = <String>[];
+        final interceptor = LoggingInterceptor(logger: messages.add, logHeaders: true);
+        final request = _post('{"note":4}')..headers['x-test'] = 'abc';
+
+        await expectLater(
+          runInterceptorChain(request, [interceptor], (request) async => throw StateError('boom')),
+          throwsStateError,
+        );
+
+        final lines = messages.single.split('\n');
+        expect(lines, hasLength(3));
+        expect(lines[0], matches(RegExp(r'❌ POST /reviews · \d+ ms · Bad state: boom$')));
+        expect(lines[1], '  ⬆️ {"note":4}');
+        expect(lines[2], startsWith('  ⬆️ headers: '));
+      });
+
+      test('compact: the request body is marked with ⬆️, before the error', () async {
+        final messages = <String>[];
+        final interceptor = LoggingInterceptor(logger: messages.add, layout: LogLayout.compact);
+
+        await expectLater(
+          runInterceptorChain(_post('{"note":4}'), [interceptor], (request) async => throw StateError('boom')),
+          throwsStateError,
+        );
+
+        expect(messages.single, matches(RegExp(r'❌ POST /reviews · \d+ ms · ⬆️ \{"note":4\} · Bad state: boom$')));
+      });
     });
 
     test('shows the port in the default label', () async {
@@ -324,6 +377,16 @@ void main() {
       test('null removes it, along with the following space', () async {
         final messages = await _run(
           (logger) => LoggingInterceptor(logger: logger, leading: null),
+          _get(),
+          (request) => http.Response('', 200, request: request),
+        );
+
+        expect(messages.single, startsWith('[example.com] 🟢'));
+      });
+
+      test('an empty string removes it too, without a leading space', () async {
+        final messages = await _run(
+          (logger) => LoggingInterceptor(logger: logger, leading: ''),
           _get(),
           (request) => http.Response('', 200, request: request),
         );
@@ -389,6 +452,26 @@ void main() {
           (request) => http.Response(overLimit, 200, request: request),
         );
         expect(defaultOverLimit.single, endsWith('  ⬇️ $atLimit…'));
+      });
+
+      test('removes newlines before counting, so they do not eat into the limit', () async {
+        final messages = await _run(
+          (logger) => LoggingInterceptor(logger: logger, maxBodyLength: 5),
+          _get(),
+          (request) => http.Response('a\r\nb\nc\nd\ne\nf', 200, request: request),
+        );
+
+        expect(messages.single, endsWith('  ⬇️ abcde…'));
+      });
+
+      test('does not add an ellipsis when only newlines follow the limit', () async {
+        final messages = await _run(
+          (logger) => LoggingInterceptor(logger: logger, maxBodyLength: 3),
+          _get(),
+          (request) => http.Response('abc\n\n', 200, request: request),
+        );
+
+        expect(messages.single, endsWith('  ⬇️ abc'));
       });
 
       test('null disables truncation', () async {

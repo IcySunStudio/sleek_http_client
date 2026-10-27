@@ -237,7 +237,8 @@ with the request / response bodies on their own lines:
 
 Exceptions thrown instead of a response (no internet, timeout, DNS /
 connection failure, ...) are logged too, on a `❌` line, then rethrown
-unchanged:
+unchanged (with the request body and headers, unless `logRequests` already
+logged them):
 
 ```text
 🌐 [api.example.com] ❌ GET /films · 30001 ms · ConnectivityException(timeout)
@@ -264,7 +265,7 @@ final client = SleekHttpClient(
 |---|---|
 | `layout` | `LogLayout.multiline` (default): each body on its own line. `LogLayout.compact`: everything on a single line, easier to filter. |
 | `labelBuilder` | `(request) => label` displayed between brackets. Defaults to the request host. Use it to show an environment, or a short name per API. A `null` or empty result removes the brackets. |
-| `leading` | Marker at the start of every message (`🌐` by default). `null` removes it. |
+| `leading` | Marker at the start of every message (`🌐` by default). `null` or empty removes it. |
 | `logRequests` | Also log each request when it is sent (`⬆️`), e.g. to spot calls that never complete. |
 | `maxBodyLength` | Maximum length of each logged body (`500` by default). `null` disables truncation. |
 | `logHeaders` | Also log the request and response headers, on indented lines. |
