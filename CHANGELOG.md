@@ -1,11 +1,10 @@
 # Changelog
 
-## 1.4.0
+## 1.3.0
+- Added per-request `extra`: `send` / `sendMultipartRequest` accept `extra: {...}`, readable in interceptors via `request.extra[key]` (new `RequestExtra` extension on `http.BaseRequest`). It is never sent as an HTTP header, and is copied by `copyAsNew()` so it survives a retry.
 - **BREAKING (log format)** `LoggingInterceptor` now logs one message per call (status icon, duration, bodies on their own lines, host in a `[label]`) instead of one line for the request and one for the response. The `[SleekHttp]` prefix is gone and bodies are cut after 500 characters. See the README for the new format.
 - Added `LoggingInterceptor` options `layout`, `labelBuilder`, `leading`, `logRequests` and `maxBodyLength`.
 - `example/main.dart`: new scenario showing the `LoggingInterceptor` output.
-
-## 1.3.0
 - `authorityGetter` is now optional: the authority can be passed per call instead. A `StateError` is thrown when a request is built with neither.
 - `sendMultipartRequest` now accepts a per-call `authority`, like `send`.
 

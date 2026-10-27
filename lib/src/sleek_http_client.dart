@@ -148,6 +148,8 @@ class SleekHttpClient {
   ///
   /// [authority] overrides [authorityGetter] for this single call.
   /// [headers] are merged with the global [headersGetter] headers.
+  /// [extra] is attached to the request (see [RequestExtra]) and readable by
+  /// interceptors; it is never sent over the network.
   ///
   /// For [JsonObject] / [JsonList], `T` itself controls null-tolerance: use
   /// `send<JsonObject>(...)` to require a non-null body (throws
@@ -162,11 +164,14 @@ class SleekHttpClient {
     JsonObject? bodyJson,
     String? stringBody,
     JsonObject? queryParameters,
+    Map<String, Object?>? extra,
   }) {
     final request = http.Request(
       method.toString(),
       buildUriFromPath(path, queryParameters, authority),
     );
+
+    if (extra != null) request.extra.addAll(extra);
 
     request.headers.addAll(
       _buildBaseHeaders(extraHeaders: headers, jsonContent: bodyJson != null),
@@ -186,18 +191,23 @@ class SleekHttpClient {
   /// Currently only supports files referenced by a local file-system path.
   ///
   /// [authority] overrides [authorityGetter] for this single call.
+  /// [extra] is attached to the request (see [RequestExtra]) and readable by
+  /// interceptors; it is never sent over the network.
   Future<T> sendMultipartRequest<T>(
     String path, {
     String? authority,
     Map<String, String>? headers,
     Map<String, String>? fields,
     required List<MultipartRequestFileData> files,
+    Map<String, Object?>? extra,
   }) async {
     final request = _RetryableMultipartRequest(
       HttpMethod.post.toString(),
       buildUriFromPath(path, null, authority),
       filesData: files,
     );
+
+    if (extra != null) request.extra.addAll(extra);
 
     request.headers.addAll(_buildBaseHeaders(extraHeaders: headers));
 
@@ -499,7 +509,26 @@ extension CopyableBaseRequest on http.BaseRequest {
       ..followRedirects = source.followRedirects
       ..maxRedirects = source.maxRedirects
       ..headers.addAll(source.headers);
+    copy.extra.addAll(source.extra);
 
     return copy;
   }
+}
+
+final _requestExtras = Expando<Map<String, Object?>>('SleekHttpClient.extra');
+
+/// Per-request data passed to interceptors, without going through HTTP headers
+/// (a header is a string and would be sent to the server).
+///
+/// Set it with the `extra` parameter of [SleekHttpClient.send] /
+/// [SleekHttpClient.sendMultipartRequest], read it in an interceptor with
+/// `request.extra[key]`.
+///
+/// To report information back to the caller (cache date, origin, ...), pass a
+/// mutable object in the extra and let the interceptor fill it.
+extension RequestExtra on http.BaseRequest {
+  /// The mutable extra map of this request, created on first access.
+  ///
+  /// [CopyableBaseRequest.copyAsNew] copies its entries (shallowly) to the new request.
+  Map<String, Object?> get extra => _requestExtras[this] ??= {};
 }

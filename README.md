@@ -156,6 +156,36 @@ Place a cache interceptor **first** in `interceptors` so a cache hit
 short-circuits everything after it (auth header attachment, token refresh,
 logging, the real network call).
 
+### Per-request `extra`
+
+Pass typed data to interceptors, per call, without going through HTTP headers
+(a header is a string and would be sent to the server):
+
+```dart
+await client.send<JsonObject>(
+  HttpMethod.get,
+  '/users',
+  extra: {'cachePolicy': CachePolicy.noCache},
+);
+
+// In an interceptor:
+final policy = request.extra['cachePolicy'] as CachePolicy? ?? CachePolicy.normal;
+```
+
+`extra` is also accepted by `sendMultipartRequest`. To report information back
+to the caller (cache date, origin, ...), pass a mutable object in the `extra`
+and let the interceptor fill it — no need to return anything else than the
+response:
+
+```dart
+final info = CacheInfo();
+await client.send<JsonObject>(HttpMethod.get, '/users', extra: {'cacheInfo': info});
+print(info.fromCache);
+```
+
+`copyAsNew()` copies the `extra` entries to the new request, so they are still
+available when an interceptor (e.g. `TokenRefreshInterceptor`) retries.
+
 ## Response types
 
 `send<T>`/`sendMultipartRequest<T>` return `T` directly — **not** `T?`. For
