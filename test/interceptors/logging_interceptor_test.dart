@@ -87,9 +87,9 @@ void main() {
         final lines = messages.single.split('\n');
         expect(lines, hasLength(4));
         expect(lines[1], '  ⬇️ ok');
-        expect(lines[2], contains('request headers'));
+        expect(lines[2], startsWith('  ⬆️ headers: '));
         expect(lines[2], contains('x-test'));
-        expect(lines[3], contains('response headers'));
+        expect(lines[3], startsWith('  ⬇️ headers: '));
         expect(lines[3], contains('x-reply'));
       });
 
@@ -179,9 +179,9 @@ void main() {
         expect(messages, hasLength(1));
         final lines = messages.single.split('\n');
         expect(lines, hasLength(3));
-        expect(lines[1], contains('request headers'));
+        expect(lines[1], startsWith('  ⬆️ headers: '));
         expect(lines[1], contains('x-test'));
-        expect(lines[2], contains('response headers'));
+        expect(lines[2], startsWith('  ⬇️ headers: '));
         expect(lines[2], contains('x-reply'));
       });
 

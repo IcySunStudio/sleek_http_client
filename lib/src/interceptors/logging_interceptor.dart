@@ -162,7 +162,7 @@ class LoggingInterceptor implements HttpInterceptor {
         details: [if (!isMultiline) body],
         extraLines: [
           if (isMultiline && body.isNotEmpty) '⬆️ $body',
-          if (logHeaders) '↳ request headers: ${request.headers}',
+          if (logHeaders) '⬆️ headers: ${request.headers}',
         ],
       ),
     );
@@ -199,8 +199,8 @@ class LoggingInterceptor implements HttpInterceptor {
         details: ['${elapsed.inMilliseconds} ms', inlineBody],
         extraLines: [
           ...bodyLines,
-          if (logHeaders && !logRequests) '↳ request headers: ${request.headers}',
-          if (logHeaders) '↳ response headers: ${response.headers}',
+          if (logHeaders && !logRequests) '⬆️ headers: ${request.headers}',
+          if (logHeaders) '⬇️ headers: ${response.headers}',
         ],
       ),
     );
