@@ -11,7 +11,7 @@ A lightweight, pure-Dart HTTP client built on top of [`package:http`](https://pu
 | **Interceptor chain** | Composable `HttpInterceptor` chain — retry, token refresh, logging, caching, ... |
 | **Token refresh** | `TokenRefreshInterceptor`: automatic 401 retry with de-duplicated refresh, shared across concurrent requests |
 | **Multipart upload** | `sendMultipartRequest` with transparent retry support |
-| **Logging** | `LoggingInterceptor`: one readable line per call (status icon, duration, bodies, optional headers) |
+| **Logging** | `LoggingInterceptor`: readable log of each call (status icon, duration, bodies, optional headers), multiline or compact |
 | **Timeout** | Configurable `timeOutDuration` (default 30 s) |
 
 ## Getting started
@@ -185,9 +185,33 @@ earlier interceptors, e.g. a cache hit). For Flutter apps, a common setup is
 to use `debugPrint` as the logger, skip headers (which may contain sensitive
 tokens), and only include bodies outside of release mode.
 
+By default, one message is logged per call, once the response is received,
+with the request / response bodies on their own lines:
+
+```text
+🌐 [api.example.com] 🟢 200 GET /films · 142 ms
+  ⬇️ {"films":[…]}
+🌐 [api.example.com] 🟠 401 POST /reviews · 88 ms
+  ⬆️ {"note":4}
+  ⬇️ {"error":"token_expired"}
+🌐 [api.example.com] 🔴 504 GET /recherche?query=Paris · 312 ms
+  ⬇️ <html>Gateway Timeout</html>
+```
+
+- The status icon reflects the status code (🟢 2xx, 🟡 3xx, 🟠 4xx, 🔴 5xx).
+  Non-2xx responses are logged as regular responses: they only become
+  exceptions when parsed, after the interceptor chain.
+- The URL is logged without its host, which is shown in the `[label]`
+  instead (the request host by default, see `labelBuilder`).
+- Bodies longer than `maxBodyLength` (500 by default) are cut with `…`.
+
 Exceptions thrown instead of a response (no internet, timeout, DNS /
 connection failure, ...) are logged too, on a `❌` line, then rethrown
-unchanged.
+unchanged:
+
+```text
+🌐 [api.example.com] ❌ GET /films · 30001 ms · ConnectivityException(timeout)
+```
 
 ```dart
 import 'package:flutter/foundation.dart';
@@ -203,6 +227,43 @@ final client = SleekHttpClient(
   ],
 );
 ```
+
+### Customizing the output
+
+| Parameter | Details |
+|---|---|
+| `layout` | `LogLayout.multiline` (default): each body on its own line. `LogLayout.compact`: everything on a single line, easier to filter. |
+| `labelBuilder` | `(request) => label` displayed between brackets. Defaults to the request host. Use it to show an environment, or a short name per API. A `null` or empty result removes the brackets. |
+| `leading` | Marker at the start of every message (`🌐` by default). `null` removes it. |
+| `logRequests` | Also log each request when it is sent (`⬆️`), e.g. to spot calls that never complete. |
+| `maxBodyLength` | Maximum length of each logged body (`500` by default). `null` disables truncation. |
+| `logHeaders` | Also log the request and response headers, on indented lines. |
+| `includeBody` | Whether to log the bodies at all. |
+
+With `LogLayout.compact`, a call takes a single line. When the request has a
+body, both bodies are told apart with `⬆️` / `⬇️`:
+
+```text
+🌐 [api.example.com] 🟢 200 GET /films · 142 ms · {"films":[…]}
+🌐 [api.example.com] 🟠 401 POST /reviews · 88 ms · ⬆️ {"note":4} ⬇️ {"error":"token_expired"}
+```
+
+```dart
+LoggingInterceptor(
+  logger: debugPrint,
+  labelBuilder: (request) => '${environment.name} · ${request.url.host}',
+  logRequests: true,
+);
+```
+
+```text
+🌐 [staging · api.example.com] ⬆️ GET /films
+🌐 [staging · api.example.com] 🟢 200 GET /films · 142 ms
+  ⬇️ {"films":[…]}
+```
+
+Run `dart run example/main.dart` (scenario 5) to see the output for every kind
+of call.
 
 ## Error handling
 

@@ -1,15 +1,20 @@
 # Changelog
 
 ## Unreleased
-- **BREAKING (log format)** `LoggingInterceptor` now logs a single line per call, once the response (or exception) is received, instead of one line for the request and one for the response:
-  `🌐 [api.example.com] 🟢 200 GET /films · 142 ms · {…}`.
+- **BREAKING (log format)** `LoggingInterceptor` now logs a single message per call, once the response (or exception) is received, instead of one line for the request and one for the response:
+  ```text
+  🌐 [api.example.com] 🟠 401 POST /reviews · 88 ms
+    ⬆️ {"note":4}
+    ⬇️ {"error":"token_expired"}
+  ```
   - The status code is always shown, with an icon matching its class: 🟢 2xx, 🟡 3xx, 🟠 4xx, 🔴 5xx (❌ for an exception). The duration of the call is shown too.
   - The URL is logged without its host, shown in a `[label]` instead.
-  - When the request has a body, it is shown before the response body: `{request} → {response}`.
+  - The request and response bodies are logged on their own indented lines (`⬆️` / `⬇️`). Use `layout: LogLayout.compact` to log everything on a single line instead: `🌐 [api.example.com] 🟠 401 POST /reviews · 88 ms · ⬆️ {"note":4} ⬇️ {"error":"token_expired"}`.
   - Bodies are cut after 500 characters by default.
   - The `[SleekHttp]` prefix is gone. Replaced by labelBuilder (see below)
   - The headers (`logHeaders`) are now logged on their own indented lines, as `request headers` / `response headers`.
-- Added `LoggingInterceptor.labelBuilder` (label of each line, the request host by default), `leading` (marker at the start of each line, `🌐` by default, `null` to remove it), `logRequests` (also log each request when sent, on a `⬆️` line) and `maxBodyLength` (`null` to disable truncation).
+- Added `LoggingInterceptor.layout` (`LogLayout.multiline` by default, or `LogLayout.compact`), `labelBuilder` (label of each message, the request host by default), `leading` (marker at the start of each message, `🌐` by default, `null` to remove it), `logRequests` (also log each request when sent, on a `⬆️` line) and `maxBodyLength` (`null` to disable truncation).
+- `example/main.dart`: new scenario showing the `LoggingInterceptor` output for every kind of call (mocked backend).
 
 ## 1.3.0
 - `authorityGetter` is now optional: the authority can be passed per call instead. A `StateError` is thrown when a request is built with neither.

@@ -1,6 +1,7 @@
 // Run with:  dart run example/main.dart
 //
-// Requires an active internet connection.
+// Requires an active internet connection (except scenario 5, which runs
+// against an in-memory mocked backend).
 // Uses https://jsonplaceholder.typicode.com as a real REST API backend.
 //
 // connectivity_plus is automatically stubbed out in non-Flutter environments
@@ -8,8 +9,10 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:sleek_http_client/sleek_http_client.dart';
 
 // =============================================================================
@@ -24,6 +27,7 @@ Future<void> main() async {
   await _scenario2ExcludedPathNoRetry();
   await _scenario3RetryAfter401WithConcurrentRequests();
   await _scenario4CacheInterceptorShortCircuit();
+  await _scenario5LoggingShowcase();
 
   _print('\nDone.');
 }
@@ -208,6 +212,158 @@ Future<void> _scenario4CacheInterceptorShortCircuit() async {
   _pass('Second call: "${second['name']}" (from cache)');
   _assert(networkCallCount == 1, 'exactly one real network call was made', networkCallCount);
 }
+
+/// Scenario 5 — Tour of [LoggingInterceptor] output, with every kind of call.
+///
+/// Runs against an in-memory mocked backend (no internet needed), so every
+/// status code class, body shape and failure can be shown. The same calls are
+/// logged three times, to compare the options:
+///   1. default layout ([LogLayout.multiline]: each body on its own line)
+///   2. [LogLayout.compact] (everything on a single line)
+///   3. `logRequests` + `logHeaders` + a custom `leading` and `labelBuilder`
+///
+/// Calls: GET with query (200), GET with a 504, POST with a 401 then a 201,
+/// PUT, DELETE (204), a large non-JSON body, a redirect (301), a multipart
+/// upload, and a timeout.
+Future<void> _scenario5LoggingShowcase() async {
+  _header('Scenario 5 — LoggingInterceptor output tour (mocked backend)');
+
+  final tempDir = await Directory.systemTemp.createTemp('sleek_http_client_example');
+  try {
+    final posterPath = '${tempDir.path}/poster.jpg';
+    await File(posterPath).writeAsString('not really a jpeg');
+
+    _print('\n  ── default: LogLayout.multiline ──');
+    await _loggingShowcaseCalls(LoggingInterceptor(logger: _printIndented), posterPath);
+
+    _print('\n  ── LogLayout.compact ──');
+    await _loggingShowcaseCalls(
+      LoggingInterceptor(logger: _printIndented, layout: LogLayout.compact),
+      posterPath,
+    );
+
+    _print('\n  ── logRequests + logHeaders + custom leading / label (only POST + timeout) ──');
+    await _loggingShowcaseCalls(
+      LoggingInterceptor(
+        logger: _printIndented,
+        logRequests: true,
+        logHeaders: true,
+        leading: '📡',
+        labelBuilder: (request) => 'staging',
+      ),
+      posterPath,
+      only: const {2, 3, 8},
+    );
+  } finally {
+    await tempDir.delete(recursive: true);
+  }
+}
+
+/// Sends a variety of requests through a client logging with [interceptor].
+/// Failures are expected (and logged by the interceptor), so they are ignored here.
+///
+/// [only] restricts the calls to those at the given indices.
+Future<void> _loggingShowcaseCalls(
+  LoggingInterceptor interceptor,
+  String posterPath, {
+  Set<int>? only,
+}) async {
+  final client = SleekHttpClient(
+    client: _mockBackend(),
+    authorityGetter: () => 'api.example.com',
+    authorizationHeaderGetter: () => 'Bearer demo-token',
+    isOnlineChecker: () async => true,
+    timeOutDuration: const Duration(milliseconds: 600),
+    interceptors: [interceptor],
+  );
+
+  final calls = <Future<void> Function()>[
+    // 0 — 200, JSON body
+    () => client.send<JsonObject>(HttpMethod.get, '/films'),
+    // 1 — 504, HTML body, query string
+    () => client.send<String>(HttpMethod.get, '/recherche', queryParameters: {'query': 'Paris', 'type': 'theater'}),
+    // 2 — 401 (first POST), request and response bodies
+    () => client.send<JsonObject>(HttpMethod.post, '/reviews', bodyJson: {'movieId': 42, 'note': 4}),
+    // 3 — 201 (second POST)
+    () => client.send<JsonObject>(HttpMethod.post, '/reviews', bodyJson: {'movieId': 42, 'note': 4}),
+    // 4 — 200, PUT
+    () => client.send<JsonObject>(HttpMethod.put, '/reviews/12', bodyJson: {'note': 5}),
+    // 5 — 204, empty response
+    () => client.send<void>(HttpMethod.delete, '/reviews/12'),
+    // 6 — 200, large non-JSON body: only its size is logged
+    () => client.send<String>(HttpMethod.get, '/films/42/poster'),
+    // 7 — 301, not followed by the mocked backend
+    () => client.send<void>(HttpMethod.get, '/old'),
+    // 8 — timeout: an exception is thrown instead of a response
+    () => client.send<void>(HttpMethod.get, '/slow'),
+    // 9 — multipart upload
+    () => client.sendMultipartRequest<JsonObject>(
+      '/upload',
+      fields: {'movieId': '42'},
+      files: [MultipartRequestFileData(fieldName: 'poster', path: posterPath, contentType: 'image/jpeg')],
+    ),
+  ];
+
+  for (final (index, call) in calls.indexed) {
+    if (only != null && !only.contains(index)) continue;
+    try {
+      await call();
+    } on Object {
+      // Expected for 3xx / 4xx / 5xx responses and the timeout: already logged by the interceptor.
+    }
+  }
+}
+
+/// An in-memory backend answering the requests of [_loggingShowcaseCalls].
+http.Client _mockBackend() {
+  var reviewPosts = 0;
+
+  return MockClient((request) async {
+    final route = '${request.method} ${request.url.path}';
+
+    // Never answers: ends in a timeout.
+    if (route == 'GET /slow') return Completer<http.Response>().future;
+
+    final (delayMs, response) = switch (route) {
+      'GET /films' => (
+        142,
+        _jsonResponse(200, {
+          'films': [
+            {'id': 42, 'title': 'Dune'},
+            {'id': 43, 'title': 'Alien'},
+          ],
+        }),
+      ),
+      'GET /recherche' => (
+        312,
+        http.Response(
+          '<html>\n<body><h1>504 Gateway Time-out</h1></body>\n</html>',
+          504,
+          headers: {'content-type': 'text/html'},
+        ),
+      ),
+      // First attempt: expired token, second one: success.
+      'POST /reviews' => reviewPosts++ == 0
+          ? (88, _jsonResponse(401, {'error': 'token_expired'}))
+          : (98, _jsonResponse(201, {'id': 12})),
+      'PUT /reviews/12' => (76, _jsonResponse(200, {'id': 12, 'movieId': 42, 'note': 5})),
+      'DELETE /reviews/12' => (54, http.Response('', 204)),
+      'GET /films/42/poster' => (205, http.Response('x' * 20000, 200, headers: {'content-type': 'text/plain'})),
+      'GET /old' => (31, http.Response('', 301, headers: {'location': 'https://api.example.com/films'})),
+      'POST /upload' => (420, _jsonResponse(201, {'uploaded': 1})),
+      _ => (10, http.Response('', 404)),
+    };
+
+    await Future<void>.delayed(Duration(milliseconds: delayMs));
+    return response;
+  });
+}
+
+http.Response _jsonResponse(int statusCode, Object body) => http.Response(
+  json.encode(body),
+  statusCode,
+  headers: {'content-type': SleekHttpClient.contentTypeJson},
+);
 
 // =============================================================================
 // _InMemoryCacheInterceptor — minimal example, no external dependency

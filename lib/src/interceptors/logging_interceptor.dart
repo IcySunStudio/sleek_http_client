@@ -7,16 +7,46 @@ import '../sleek_http_client.dart' show SleekHttpClient;
 import '../types.dart';
 import 'interceptor.dart';
 
+/// How [LoggingInterceptor] lays out the request and response bodies.
+enum LogLayout {
+  /// Each body is logged on its own indented line, under the line describing the call:
+  ///
+  /// ```text
+  /// 🌐 [api.example.com] 🟠 401 POST /reviews · 88 ms
+  ///   ⬆️ {"note":4}
+  ///   ⬇️ {"error":"token_expired"}
+  /// ```
+  ///
+  /// Easiest to read, but a call spans several lines (a console filter on the
+  /// first line hides the bodies).
+  multiline,
+
+  /// Everything on a single line. When the request has a body, both bodies are
+  /// told apart with `⬆️` / `⬇️`:
+  ///
+  /// ```text
+  /// 🌐 [api.example.com] 🟠 401 POST /reviews · 88 ms · ⬆️ {"note":4} ⬇️ {"error":"token_expired"}
+  /// ```
+  ///
+  /// Keeps one line per call (easy to filter and grep), but long bodies are
+  /// harder to read.
+  compact,
+}
+
 /// Logs every request passing through the chain, as well as any exception
 /// thrown further down the chain instead of a response (e.g. no internet,
 /// timeout, DNS / connection failure). The exception is rethrown unchanged.
 ///
-/// By default, a single line is logged per call, once the response (or the
-/// exception) is received:
+/// By default, one message is logged per call, once the response (or the
+/// exception) is received, with the request / response bodies on their own
+/// lines (see [LogLayout]):
 ///
 /// ```text
-/// 🌐 [api.example.com] 🟢 200 GET /films · 142 ms · {"films":[…]}
-/// 🌐 [api.example.com] 🟠 401 POST /reviews · 88 ms · {"note":4} → {"error":"token_expired"}
+/// 🌐 [api.example.com] 🟢 200 GET /films · 142 ms
+///   ⬇️ {"films":[…]}
+/// 🌐 [api.example.com] 🟠 401 POST /reviews · 88 ms
+///   ⬆️ {"note":4}
+///   ⬇️ {"error":"token_expired"}
 /// 🌐 [api.example.com] ❌ GET /films · 30001 ms · ConnectivityException(timeout)
 /// ```
 ///
@@ -24,15 +54,16 @@ import 'interceptor.dart';
 /// - The status icon reflects the status code: 🟢 2xx, 🟡 3xx, 🟠 4xx, 🔴 5xx.
 ///   Non-2xx responses are still logged as regular responses (they only become
 ///   errors when parsed, after the chain), hence the dedicated icons.
-/// - `{request body} → {response body}` is shown when the request has a body.
 /// - The URL does not include the host: see [labelBuilder].
+/// - Use [LogLayout.compact] to log everything on a single line instead.
 ///
 /// Set [logRequests] to also log each request as soon as it is sent. This is
 /// useful to spot calls that never complete (e.g. no timeout set):
 ///
 /// ```text
 /// 🌐 [api.example.com] ⬆️ GET /films
-/// 🌐 [api.example.com] 🟢 200 GET /films · 142 ms · {"films":[…]}
+/// 🌐 [api.example.com] 🟢 200 GET /films · 142 ms
+///   ⬇️ {"films":[…]}
 /// ```
 ///
 /// Place it last in [SleekHttpClient.interceptors] (the innermost position,
@@ -54,6 +85,7 @@ class LoggingInterceptor implements HttpInterceptor {
     this.logHeaders = false,
     this.includeBody = true,
     this.logRequests = false,
+    this.layout = LogLayout.multiline,
     this.leading = '🌐',
     this.labelBuilder,
     this.maxBodyLength = 500,
@@ -71,9 +103,13 @@ class LoggingInterceptor implements HttpInterceptor {
   /// Whether to include the request/response body.
   final bool includeBody;
 
-  /// Whether to also log each request when it is sent, on top of the single
-  /// line logged once the response (or exception) is received.
+  /// Whether to also log each request when it is sent, on top of the message
+  /// logged once the response (or exception) is received.
   final bool logRequests;
+
+  /// How the bodies are laid out: each on its own line ([LogLayout.multiline],
+  /// the default) or everything on a single line ([LogLayout.compact]).
+  final LogLayout layout;
 
   /// Marker put at the very start of every log line, to spot them among
   /// other logs. `null` removes it (and the space following it).
@@ -117,12 +153,17 @@ class LoggingInterceptor implements HttpInterceptor {
   }
 
   void _logRequest(http.BaseRequest request, String body) {
+    final isMultiline = layout == LogLayout.multiline;
+
     logger(
       _buildMessage(
         request,
         icon: '⬆️',
-        details: [body],
-        extraLines: [if (logHeaders) '↳ request headers: ${request.headers}'],
+        details: [if (!isMultiline) body],
+        extraLines: [
+          if (isMultiline && body.isNotEmpty) '⬆️ $body',
+          if (logHeaders) '↳ request headers: ${request.headers}',
+        ],
       ),
     );
   }
@@ -130,12 +171,24 @@ class LoggingInterceptor implements HttpInterceptor {
   void _logResponse(http.BaseRequest request, http.Response response, String requestBody, Duration elapsed) {
     final responseBody = _responseBody(response);
 
-    // Request and response bodies are merged on a single line only when the request body was not already logged by [_logRequest].
-    final String body;
-    if (logRequests || requestBody.isEmpty) {
-      body = responseBody;
-    } else {
-      body = responseBody.isEmpty ? '$requestBody →' : '$requestBody → $responseBody';
+    // The request body is shown here only if it was not already logged by [_logRequest].
+    final shownRequestBody = logRequests ? '' : requestBody;
+
+    final String inlineBody;
+    final List<String> bodyLines;
+    switch (layout) {
+      case LogLayout.multiline:
+        inlineBody = '';
+        bodyLines = [
+          if (shownRequestBody.isNotEmpty) '⬆️ $shownRequestBody',
+          if (responseBody.isNotEmpty) '⬇️ $responseBody',
+        ];
+      case LogLayout.compact:
+        // Markers are only needed to tell the two bodies apart.
+        bodyLines = const [];
+        inlineBody = shownRequestBody.isEmpty
+            ? responseBody
+            : ['⬆️ $shownRequestBody', if (responseBody.isNotEmpty) '⬇️ $responseBody'].join(' ');
     }
 
     logger(
@@ -143,8 +196,9 @@ class LoggingInterceptor implements HttpInterceptor {
         request,
         icon: _statusIcon(response.statusCode),
         status: response.statusCode,
-        details: ['${elapsed.inMilliseconds} ms', body],
+        details: ['${elapsed.inMilliseconds} ms', inlineBody],
         extraLines: [
+          ...bodyLines,
           if (logHeaders && !logRequests) '↳ request headers: ${request.headers}',
           if (logHeaders) '↳ response headers: ${response.headers}',
         ],
