@@ -12,7 +12,8 @@ A lightweight, pure-Dart HTTP client built on top of [`package:http`](https://pu
 | **Token refresh** | `TokenRefreshInterceptor`: automatic 401 retry with de-duplicated refresh, shared across concurrent requests |
 | **Multipart upload** | `sendMultipartRequest` with transparent retry support |
 | **Logging** | `LoggingInterceptor`: readable log of each call (status icon, duration, bodies, optional headers), multiline or compact |
-| **Timeout** | Configurable `timeOutDuration` (default 30 s) |
+| **Timeout** | Configurable `timeOutDuration` (default 30 s); a timed-out request is really aborted, not just abandoned |
+| **Abort** | `abortAll()` cancels every request in flight, e.g. on logout |
 
 ## Getting started
 
@@ -186,6 +187,44 @@ print(info.fromCache);
 `copyAsNew()` copies the `extra` entries to the new request, so they are still
 available when an interceptor (e.g. `TokenRefreshInterceptor`) retries.
 
+## Aborting requests
+
+`abortAll()` cancels every request currently in flight on the client, retries
+and a token refresh in progress included. Typical use: a logout, so that no
+pending call can complete afterwards and write stale data.
+
+```dart
+client.abortAll();      // before clearing the session
+clearSession();
+```
+
+Each aborted call throws a `RequestAbortedException` (re-exported from
+`package:http`, a subclass of `ClientException`), either before the request is
+sent or while the response is being received. Requests sent after `abortAll()`
+are not affected.
+
+```dart
+try {
+  await client.send<void>(HttpMethod.post, '/trees', bodyJson: data);
+} on RequestAbortedException {
+  return; // cancelled on purpose, nothing to show
+} on ClientException {
+  // other connection problems
+}
+```
+
+Things to know:
+
+- Aborting stops the client from waiting for the response; it cannot undo what
+  the server already received. A `POST` that was sent may still be applied.
+- A call whose response has already been received and is being processed by
+  your code is not interrupted.
+- It relies on the abort support of the underlying `http.Client` (`IOClient`
+  and `BrowserClient` have it). A custom client that ignores `http.Abortable`
+  keeps running.
+- `abortAll()` is per client instance: use a dedicated `SleekHttpClient` for
+  requests you want to cancel independently of the others.
+
 ## Response types
 
 `send<T>`/`sendMultipartRequest<T>` return `T` directly — **not** `T?`. For
@@ -308,4 +347,6 @@ final client = SleekHttpClient(
 );
 ```
 
-Connectivity problems throw `ConnectivityException`.
+Connectivity problems throw `ConnectivityException`. A request cancelled with
+`abortAll()` throws `RequestAbortedException` (see
+[Aborting requests](#aborting-requests)).

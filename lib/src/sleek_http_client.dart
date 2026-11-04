@@ -13,6 +13,8 @@ import 'interceptors/interceptor.dart';
 import 'interceptors/logging_interceptor.dart';
 import 'types.dart';
 
+export 'package:http/http.dart' show RequestAbortedException;
+
 export 'exceptions.dart';
 export 'http_response_extensions.dart';
 export 'interceptors/interceptor.dart';
@@ -97,6 +99,9 @@ class SleekHttpClient {
   /// request. See [_buildEffectiveInterceptors].
   late final List<HttpInterceptor> _effectiveInterceptors = _buildEffectiveInterceptors();
 
+  /// Abort signals of the calls in flight, completed by [abortAll].
+  final Set<Completer<void>> _pendingAbortSignals = {};
+
   /// How long to wait for a response before throwing a
   /// [ConnectivityException] with [ConnectivityExceptionType.timeout].
   final Duration timeOutDuration;
@@ -166,7 +171,7 @@ class SleekHttpClient {
     JsonObject? queryParameters,
     Map<String, Object?>? extra,
   }) {
-    final request = http.Request(
+    final request = _SleekRequest(
       method.toString(),
       buildUriFromPath(path, queryParameters, authority),
     );
@@ -215,9 +220,24 @@ class SleekHttpClient {
       request.fields.addAll(fields);
     }
 
-    await request.buildFiles();
+    return _sendHandledRequest<T>(request, prepare: request.buildFiles);
+  }
 
-    return _sendHandledRequest<T>(request);
+  /// Aborts every request currently in flight on this client (including their
+  /// retries and a token refresh in progress, which goes through the same
+  /// client).
+  ///
+  /// Typical use: call it on logout, before clearing the session, so that no
+  /// pending call can complete afterwards and write stale data.
+  ///
+  /// Each aborted call throws a [RequestAbortedException] (a `ClientException`)
+  /// — before sending, or while the response is being received. Requests sent
+  /// after this call are not affected. Aborting stops the client from waiting
+  /// for the response; it cannot undo what the server already received.
+  void abortAll() {
+    for (final signal in _pendingAbortSignals.toList()) {
+      if (!signal.isCompleted) signal.complete();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -266,9 +286,26 @@ class SleekHttpClient {
   // Private – request dispatch
   // ---------------------------------------------------------------------------
 
-  Future<T> _sendHandledRequest<T>(http.BaseRequest request) async {
-    final response = await runInterceptorChain(request, _effectiveInterceptors, _sendRequest);
-    return _ResponseHandler<T>(response, errorBuilder: errorBuilder).parse();
+  /// Runs [request] through the interceptor chain and parses the response.
+  ///
+  /// The call is abortable by [abortAll] from the very start until it ends.
+  /// [prepare] runs after that registration, so that an abort during an async
+  /// preparation step (e.g. reading multipart files) is not missed.
+  Future<T> _sendHandledRequest<T>(
+    _SleekAbortable request, {
+    Future<void> Function()? prepare,
+  }) async {
+    // Shared with the copies of the request (see [CopyableBaseRequest.copyAsNew]).
+    final abortSignal = request.abortSignal;
+    _pendingAbortSignals.add(abortSignal);
+
+    try {
+      await prepare?.call();
+      final response = await runInterceptorChain(request, _effectiveInterceptors, _sendRequest);
+      return _ResponseHandler<T>(response, errorBuilder: errorBuilder).parse();
+    } finally {
+      _pendingAbortSignals.remove(abortSignal);
+    }
   }
 
   /// Builds the interceptor list actually used to send requests: [interceptors]
@@ -315,6 +352,8 @@ class SleekHttpClient {
         return http.Response.fromStream(streamed);
       }()).timeout(timeOutDuration);
     } on TimeoutException {
+      // `Future.timeout` only stops waiting: abort the request too, so the connection does not keep running in the background.
+      if (request is _SleekAbortable) request.abortOnTimeout();
       throw const ConnectivityException(ConnectivityExceptionType.timeout);
     }
   }
@@ -397,6 +436,31 @@ class _AuthHeaderInterceptor implements HttpInterceptor {
   }
 }
 
+/// Makes a request abortable (see [http.Abortable]), by
+/// [SleekHttpClient.abortAll] through [abortSignal], and by the client
+/// itself on timeout.
+mixin _SleekAbortable on http.BaseRequest implements http.Abortable {
+  /// Completed to abort this request and all its copies (retries, see
+  /// [CopyableBaseRequest.copyAsNew]) — they share the same signal.
+  Completer<void> abortSignal = Completer<void>();
+
+  /// Per request, not shared: a timeout aborts this attempt only, a retry must
+  /// still be able to go through.
+  final Completer<void> _timeoutSignal = Completer<void>();
+
+  /// Read once by the underlying client when the request is sent.
+  @override
+  late final Future<void>? abortTrigger = Future.any([abortSignal.future, _timeoutSignal.future]);
+
+  void abortOnTimeout() {
+    if (!_timeoutSignal.isCompleted) _timeoutSignal.complete();
+  }
+}
+
+class _SleekRequest extends http.Request with _SleekAbortable {
+  _SleekRequest(super.method, super.url);
+}
+
 class _ResponseHandler<T> {
   _ResponseHandler(this.response, {this.errorBuilder})
       : isSuccess = SleekHttpClient.isStatusCodeSuccess(response.statusCode);
@@ -454,7 +518,7 @@ class _ResponseHandler<T> {
 /// The standard [http.MultipartRequest] cannot be re-sent because its file
 /// streams are consumed after the first send. This subclass stores the original
 /// file metadata and re-builds the streams from disk on every retry.
-class _RetryableMultipartRequest extends http.MultipartRequest {
+class _RetryableMultipartRequest extends http.MultipartRequest with _SleekAbortable {
   _RetryableMultipartRequest(
     super.method,
     super.url, {
@@ -487,7 +551,7 @@ extension CopyableBaseRequest on http.BaseRequest {
     http.BaseRequest copy;
 
     if (source is http.Request) {
-      copy = http.Request(source.method, source.url)
+      copy = _SleekRequest(source.method, source.url)
         ..encoding = source.encoding
         ..bodyBytes = source.bodyBytes;
     } else if (source is _RetryableMultipartRequest) {
@@ -510,6 +574,9 @@ extension CopyableBaseRequest on http.BaseRequest {
       ..maxRedirects = source.maxRedirects
       ..headers.addAll(source.headers);
     copy.extra.addAll(source.extra);
+
+    // The copy stays tied to the original's abort signal, so a retry cannot outlive an abort.
+    if (source is _SleekAbortable && copy is _SleekAbortable) copy.abortSignal = source.abortSignal;
 
     return copy;
   }
