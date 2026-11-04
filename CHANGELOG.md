@@ -4,6 +4,7 @@
 - Added `SleekHttpClient.abortAll()`: aborts every request in flight on the client (retries and a token refresh in progress included), e.g. on logout. Aborted calls throw `RequestAbortedException`, now re-exported from `package:http`. Requests sent afterwards are not affected.
 - A timeout now really aborts the underlying request instead of only ceasing to wait for it, so the connection no longer keeps running in the background. The exception thrown is still `ConnectivityException(timeout)`, and a retry after a timeout starts with a fresh timeout.
 - `copyAsNew()` keeps the abort link of the original request, so a retry cannot outlive an `abortAll()`.
+- `LoggingInterceptor` logs a call cancelled by `abortAll()` on a `🚫` line (`aborted`) instead of a `❌` line with the exception.
 
 ## 1.3.0
 - Added per-request `extra`: `send` / `sendMultipartRequest` accept `extra: {...}`, readable in interceptors via `request.extra[key]` (new `RequestExtra` extension on `http.BaseRequest`). It is never sent as an HTTP header, and is copied by `copyAsNew()` so it survives a retry.

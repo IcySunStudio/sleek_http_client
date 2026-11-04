@@ -1,6 +1,6 @@
 // Run with:  dart run example/main.dart
 //
-// Requires an active internet connection (except scenario 5, which runs
+// Requires an active internet connection (except scenarios 5 and 6, which run
 // against an in-memory mocked backend).
 // Uses https://jsonplaceholder.typicode.com as a real REST API backend.
 //
@@ -28,6 +28,7 @@ Future<void> main() async {
   await _scenario3RetryAfter401WithConcurrentRequests();
   await _scenario4CacheInterceptorShortCircuit();
   await _scenario5LoggingShowcase();
+  await _scenario6AbortAllOnLogout();
 
   _print('\nDone.');
 }
@@ -258,6 +259,68 @@ Future<void> _scenario5LoggingShowcase() async {
     await tempDir.delete(recursive: true);
   }
 }
+
+/// Scenario 6 — [SleekHttpClient.abortAll] on logout.
+///
+/// Runs against an in-memory mocked backend (no internet needed).
+///
+/// Flow:
+///   GET /slow/profile  ─┐ in flight, the backend never answers
+///   GET /slow/feed     ─┘
+///   logout → abortAll()
+///     └─ both calls throw [RequestAbortedException] (logged on a 🚫 line)
+///   GET /me
+///     └─ sent after abortAll() → not affected, 200
+Future<void> _scenario6AbortAllOnLogout() async {
+  _header('Scenario 6 — abortAll() on logout (mocked backend)');
+
+  final client = SleekHttpClient(
+    client: _abortAwareBackend(),
+    authorityGetter: () => 'api.example.com',
+    isOnlineChecker: () async => true,
+    interceptors: [LoggingInterceptor(logger: _printIndented)],
+  );
+
+  Future<String> call(String path) async {
+    try {
+      await client.send<JsonObject>(HttpMethod.get, path);
+      return 'completed';
+    } on RequestAbortedException {
+      return 'aborted'; // cancelled on purpose, nothing to show
+    }
+  }
+
+  final inFlight = [call('/slow/profile'), call('/slow/feed')];
+  await Future<void>.delayed(const Duration(milliseconds: 100));
+
+  _print('  [app] user logs out → abortAll(), then the session is cleared');
+  client.abortAll();
+
+  final outcomes = await Future.wait(inFlight);
+  _assert(outcomes.every((outcome) => outcome == 'aborted'), 'every call in flight was aborted', outcomes);
+
+  final me = await client.send<JsonObject>(HttpMethod.get, '/me');
+  _pass('Request sent after abortAll() is not affected: "${me['name']}"');
+}
+
+/// A mocked backend where `/slow/...` never answers but, like the real
+/// `IOClient` / `BrowserClient`, gives up as soon as the request is aborted
+/// (see [http.Abortable]). Everything else answers right away.
+http.Client _abortAwareBackend() => MockClient.streaming((request, body) async {
+  if (request.url.path.startsWith('/slow')) {
+    final response = Completer<http.StreamedResponse>();
+    if (request case http.Abortable(:final abortTrigger?)) {
+      unawaited(abortTrigger.whenComplete(() => response.completeError(RequestAbortedException(request.url))));
+    }
+    return response.future;
+  }
+
+  return http.StreamedResponse(
+    Stream.value(utf8.encode(json.encode({'name': 'Ada'}))),
+    200,
+    headers: {'content-type': SleekHttpClient.contentTypeJson},
+  );
+});
 
 /// Sends a variety of requests through a client logging with [interceptor].
 /// Failures are expected (and logged by the interceptor), so they are ignored here.

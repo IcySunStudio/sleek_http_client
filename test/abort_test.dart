@@ -105,6 +105,22 @@ void main() {
       expect(attempt, 2);
     });
 
+    test('LoggingInterceptor logs an aborted call on a dedicated line, not as an error', () async {
+      final logs = <String>[];
+      final client = _client(
+        _hangingMockClient(),
+        interceptors: [LoggingInterceptor(logger: logs.add)],
+      );
+
+      final expectation = expectLater(client.send<String>(HttpMethod.get, '/x'), throwsA(isA<RequestAbortedException>()));
+      await Future<void>.delayed(Duration.zero);
+      client.abortAll();
+      await expectation;
+
+      expect(logs, hasLength(1));
+      expect(logs.single, allOf(contains('🚫'), contains('GET /x'), contains('aborted'), isNot(contains('❌'))));
+    });
+
     test('copyAsNew keeps the abort signal', () async {
       http.BaseRequest? copy;
       final client = _client(

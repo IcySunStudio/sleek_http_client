@@ -48,12 +48,15 @@ enum LogLayout {
 ///   ⬆️ {"note":4}
 ///   ⬇️ {"error":"token_expired"}
 /// 🌐 [api.example.com] ❌ GET /films · 30001 ms · ConnectivityException(timeout)
+/// 🌐 [api.example.com] 🚫 GET /films · 120 ms · aborted
 /// ```
 ///
 /// - `🌐` is the [leading] marker, `[api.example.com]` the label (see [labelBuilder]).
 /// - The status icon reflects the status code: 🟢 2xx, 🟡 3xx, 🟠 4xx, 🔴 5xx.
 ///   Non-2xx responses are still logged as regular responses (they only become
 ///   errors when parsed, after the chain), hence the dedicated icons.
+/// - `❌` marks an exception thrown instead of a response, `🚫` a call cancelled
+///   with [SleekHttpClient.abortAll].
 /// - The URL does not include the host: see [labelBuilder].
 /// - Use [LogLayout.compact] to log everything on a single line instead.
 ///
@@ -212,14 +215,17 @@ class LoggingInterceptor implements HttpInterceptor {
     // The request body and headers are shown here only if they were not already logged by [_logRequest].
     final shownRequestBody = logRequests ? '' : requestBody;
 
+    // An abort is a deliberate cancellation (see [SleekHttpClient.abortAll]), not a failure: no error icon, and no exception text (it only repeats the URL).
+    final isAborted = error is http.RequestAbortedException;
+
     logger(
       _buildMessage(
         request,
-        icon: '❌',
+        icon: isAborted ? '🚫' : '❌',
         details: [
           '${elapsed.inMilliseconds} ms',
           if (!isMultiline && shownRequestBody.isNotEmpty) '⬆️ $shownRequestBody',
-          '$error',
+          isAborted ? 'aborted' : '$error',
         ],
         extraLines: [
           if (isMultiline && shownRequestBody.isNotEmpty) '⬆️ $shownRequestBody',

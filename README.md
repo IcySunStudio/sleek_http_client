@@ -224,6 +224,11 @@ Things to know:
   keeps running.
 - `abortAll()` is per client instance: use a dedicated `SleekHttpClient` for
   requests you want to cancel independently of the others.
+- A `TokenRefreshInterceptor` callback already running is not interrupted: only
+  the requests it has already sent through the client are aborted. If it is
+  still busy before sending (e.g. reading the refresh token), its request goes
+  out normally and it may save tokens after `abortAll()`. Check that the
+  session is still valid before writing them.
 
 ## Response types
 
@@ -281,6 +286,13 @@ logged them):
 
 ```text
 🌐 [api.example.com] ❌ GET /films · 30001 ms · ConnectivityException(timeout)
+```
+
+A call cancelled with `abortAll()` is not a failure, so it is logged on a `🚫`
+line instead:
+
+```text
+🌐 [api.example.com] 🚫 GET /films · 120 ms · aborted
 ```
 
 ```dart

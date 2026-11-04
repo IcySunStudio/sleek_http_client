@@ -234,6 +234,9 @@ class SleekHttpClient {
   /// — before sending, or while the response is being received. Requests sent
   /// after this call are not affected. Aborting stops the client from waiting
   /// for the response; it cannot undo what the server already received.
+  ///
+  /// A [TokenRefreshInterceptor] callback already running is not interrupted
+  /// (only the requests it has already sent are): see the README.
   void abortAll() {
     for (final signal in _pendingAbortSignals.toList()) {
       if (!signal.isCompleted) signal.complete();
