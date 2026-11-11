@@ -1,6 +1,8 @@
 # Changelog
 
 ## 1.5.0
+- **BREAKING (behavior)** The default `Accept` header is now deduced from `T` instead of always being `application/json`: `String` and `BytesBody` no longer send any `Accept` header. `application/json` is kept for `JsonObject` / `JsonList` (and their nullable variants) and for the undefined types (`void`, `Null`, `Object?`, `dynamic`, no type argument), so JSON error bodies are still parsed. It applies to `send`, `sendUri` and `sendMultipartRequest`, and can still be replaced by `headersGetter` or by the `headers` of a call. A server that answers errors differently without `Accept: application/json` (HTML page or redirect instead of a JSON error, e.g. Laravel validation) is affected: restore the old behavior with `headersGetter: () => {'accept': 'application/json'}`. `buildAuthorizedHeaders()` is unchanged (still `Accept: application/json`).
+- Fixed a header given by `headersGetter` winning over the same header of a call when their names differ by case (e.g. `Accept` vs `accept`): the call now always wins.
 - Added `SleekHttpClient.sendUri<T>()`: sends a request to a full `Uri` as is.
 
 ## 1.4.0

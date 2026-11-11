@@ -266,6 +266,26 @@ server returns a `null` body:
 | `BytesBody` | Raw bytes + MIME type (never null) | — |
 | *(omitted / `void` / `Null` / `Object?` / `dynamic`)* | `null` — body is ignored | — |
 
+### Default `Accept` header
+
+The default `Accept` header depends on the type argument:
+
+| Type argument | Default `Accept` |
+|---|---|
+| `JsonObject`, `JsonList` (and their nullable variants) | `application/json` |
+| *(omitted / `void` / `Null` / `Object?` / `dynamic`)* | `application/json` (so a JSON error body is still returned by the server and parsed) |
+| `String`, `BytesBody` | none |
+
+It applies to `send`, `sendUri` and `sendMultipartRequest`, and can be replaced
+by `headersGetter` or by the `headers` of a call (header names are
+case-insensitive; the call wins over `headersGetter`). If a server answers
+errors differently without `Accept: application/json` (an HTML page or a
+redirect instead of a JSON error), set it back for all calls with
+`headersGetter: () => {'accept': 'application/json'}`.
+
+`buildAuthorizedHeaders()` is unchanged: it has no response type to infer from,
+so it always includes `Accept: application/json`.
+
 A malformed body, or JSON of the wrong shape (e.g. a list where an object was
 expected), always throws — `FormatException` / `TypeError` respectively —
 regardless of nullability: only an explicit JSON `null` (or an empty body,

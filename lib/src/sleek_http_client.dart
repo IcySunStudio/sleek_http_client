@@ -140,8 +140,11 @@ class SleekHttpClient {
   ///
   /// Useful when you need to authorize external requests (e.g. file downloads)
   /// that still require the current token.
+  ///
+  /// Always includes `Accept: application/json`, since there is no response
+  /// type to infer it from (unlike [sendUri]): override it if needed.
   Map<String, String> buildAuthorizedHeaders() => {
-    ..._buildBaseHeaders(),
+    ..._buildBaseHeaders(accept: contentTypeJsonMimeType),
     ..._buildAuthHeader(),
   };
 
@@ -199,6 +202,10 @@ class SleekHttpClient {
   /// interceptors; it is never sent over the network.
   /// The response is parsed as for [send].
   ///
+  /// The default `Accept` header depends on `T`: `application/json` for the
+  /// JSON types and the undefined types (`void`, `Object?`, ...), none for
+  /// [String] and [BytesBody]. [headersGetter] and [headers] can override it.
+  ///
   /// Throws an [ArgumentError] if [uri] is not an absolute `http` / `https` URI
   /// with a host. A plain `http` URI is sent as is, without encryption.
   Future<T> sendUri<T>(
@@ -218,7 +225,7 @@ class SleekHttpClient {
     if (extra != null) request.extra.addAll(extra);
 
     request.headers.addAll(
-      _buildBaseHeaders(extraHeaders: headers, jsonContent: bodyJson != null),
+      _buildBaseHeaders(accept: _defaultAcceptFor<T>(), extraHeaders: headers, jsonContent: bodyJson != null),
     );
 
     if (bodyJson != null) {
@@ -233,6 +240,8 @@ class SleekHttpClient {
   /// Builds and sends a multipart request (file upload).
   ///
   /// Currently only supports files referenced by a local file-system path.
+  ///
+  /// The default `Accept` header depends on `T`, as for [sendUri].
   ///
   /// [authority] overrides [authorityGetter] for this single call.
   /// [extra] is attached to the request (see [RequestExtra]) and readable by
@@ -253,7 +262,7 @@ class SleekHttpClient {
 
     if (extra != null) request.extra.addAll(extra);
 
-    request.headers.addAll(_buildBaseHeaders(extraHeaders: headers));
+    request.headers.addAll(_buildBaseHeaders(accept: _defaultAcceptFor<T>(), extraHeaders: headers));
 
     if (fields != null) {
       request.fields.addAll(fields);
@@ -309,15 +318,35 @@ class SleekHttpClient {
   // Private – header building
   // ---------------------------------------------------------------------------
 
+  /// [accept] is the default `Accept` header (none when `null`); [headersGetter]
+  /// and [extraHeaders] override it.
   Map<String, String> _buildBaseHeaders({
+    String? accept,
     Map<String, String>? extraHeaders,
     bool jsonContent = false,
-  }) => {
-    HttpHeaders.acceptHeader: contentTypeJsonMimeType,
-    if (jsonContent) HttpHeaders.contentTypeHeader: contentTypeJson,
-    ...?headersGetter?.call(),
-    ...?extraHeaders,
-  };
+  }) => _mergeHeaders([
+    {
+      if (accept != null) HttpHeaders.acceptHeader: accept,
+      if (jsonContent) HttpHeaders.contentTypeHeader: contentTypeJson,
+    },
+    headersGetter?.call(),
+    extraHeaders,
+  ]);
+
+  /// Merges [sources] in order, a later source replacing an earlier one's header
+  /// whatever its case (`Accept` vs `accept`): header names are case-insensitive,
+  /// while a plain map spread would keep both and leave the winner to the order
+  /// of the keys.
+  static Map<String, String> _mergeHeaders(List<Map<String, String>?> sources) {
+    final result = <String, String>{};
+    for (final source in sources) {
+      for (final MapEntry(:key, :value) in source?.entries ?? const <MapEntry<String, String>>[]) {
+        result.removeWhere((existing, _) => existing.toLowerCase() == key.toLowerCase());
+        result[key] = value;
+      }
+    }
+    return result;
+  }
 
   Map<String, String> _buildAuthHeader() {
     final value = authorizationHeaderGetter?.call();
@@ -458,6 +487,14 @@ class BytesBody {
 /// `bodyJson<T?>()`), a nullable type has no literal expression syntax on
 /// its own (`int?` alone is parsed as the start of a conditional `?:`).
 Type _typeOf<X>() => X;
+
+/// Default `Accept` header for a response parsed as [T]: none for the raw body
+/// types ([String], [BytesBody]), where JSON would be the wrong thing to ask
+/// for (an HTML page, a file download, ...). `application/json` for everything
+/// else: the JSON types, and the undefined types (`void`, `Object?`, ...) so
+/// that a JSON error body is still returned by the server and parsed.
+String? _defaultAcceptFor<T>() =>
+    T == String || T == BytesBody ? null : SleekHttpClient.contentTypeJsonMimeType;
 
 /// Attaches headers built from [_headerGetter] to every request, evaluated
 /// fresh every time `chain.proceed` reaches this link (see
