@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.5.0
+- Added `SleekHttpClient.sendUri<T>()`: sends a request to a full `Uri` as is.
+
 ## 1.4.0
 - Added `SleekHttpClient.abortAll()`: aborts every request in flight on the client (retries and a token refresh in progress included), e.g. on logout. Aborted calls throw `RequestAbortedException`, now re-exported from `package:http`. Requests sent afterwards are not affected.
 - A timeout now really aborts the underlying request instead of only ceasing to wait for it, so the connection no longer keeps running in the background. The exception thrown is still `ConnectivityException(timeout)`, and a retry after a timeout starts with a fresh timeout.

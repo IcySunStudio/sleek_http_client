@@ -170,11 +170,50 @@ class SleekHttpClient {
     String? stringBody,
     JsonObject? queryParameters,
     Map<String, Object?>? extra,
+  }) => sendUri<T>(
+    method,
+    buildUriFromPath(path, queryParameters, authority),
+    headers: headers,
+    bodyJson: bodyJson,
+    stringBody: stringBody,
+    extra: extra,
+  );
+
+  /// Builds and sends a standard HTTP request to a full [uri].
+  ///
+  /// The [uri] is sent as is (scheme, port, repeated query parameters, ...):
+  /// neither [authorityGetter] nor [basePath] is applied. Use it to call a URL
+  /// that is not built from a path, e.g. a pagination link or a third-party
+  /// page. [send] builds its [Uri] and delegates here, so both share the same
+  /// sending path.
+  ///
+  /// Everything else configured on the client applies exactly as for [send]:
+  /// [headersGetter], the `Authorization` header from
+  /// [authorizationHeaderGetter], the [interceptors] (including a
+  /// [TokenRefreshInterceptor]), the timeout and [abortAll]. To call a third-party
+  /// service without sending it your token, use another [SleekHttpClient]
+  /// instance configured without those (it can share the same [LoggingInterceptor]).
+  ///
+  /// [headers] are merged with the global [headersGetter] headers.
+  /// [extra] is attached to the request (see [RequestExtra]) and readable by
+  /// interceptors; it is never sent over the network.
+  /// The response is parsed as for [send].
+  ///
+  /// Throws an [ArgumentError] if [uri] is not an absolute `http` / `https` URI
+  /// with a host. A plain `http` URI is sent as is, without encryption.
+  Future<T> sendUri<T>(
+    HttpMethod method,
+    Uri uri, {
+    Map<String, String>? headers,
+    JsonObject? bodyJson,
+    String? stringBody,
+    Map<String, Object?>? extra,
   }) {
-    final request = _SleekRequest(
-      method.toString(),
-      buildUriFromPath(path, queryParameters, authority),
-    );
+    if ((uri.scheme != 'http' && uri.scheme != 'https') || uri.host.isEmpty) {
+      throw ArgumentError.value(uri.toString(), 'uri', 'Must be an absolute http or https URI with a host');
+    }
+
+    final request = _SleekRequest(method.toString(), uri);
 
     if (extra != null) request.extra.addAll(extra);
 

@@ -47,6 +47,12 @@ await client.send(
 // `authorityGetter` is optional: pass `authority` per call instead (a StateError is thrown if neither is set)
 await client.send(HttpMethod.get, '/health', authority: 'status.example.com');
 
+// Full URI, sent as is (scheme, port, repeated query parameters): no authority, no basePath
+final html = await client.sendUri<String>(
+  HttpMethod.get,
+  Uri.parse('https://tickets.example.org/events?tag=a&tag=b'),
+);
+
 // File upload
 await client.sendMultipartRequest(
   '/upload',
@@ -59,6 +65,20 @@ await client.sendMultipartRequest(
   ],
 );
 ```
+
+`send` builds its `Uri` from the authority, `basePath` and path, then delegates
+to `sendUri`: both go through the same sending path (headers, interceptors,
+timeout, abort, response parsing).
+
+> **`sendUri` applies the whole client configuration.** A `SleekHttpClient` is a
+> set of shared settings: `headersGetter`, the `Authorization` header from
+> `authorizationHeaderGetter` and a `TokenRefreshInterceptor` apply to every
+> request, whatever the host. To call a third-party service without sending it
+> your token, use another `SleekHttpClient` instance configured without them.
+> It can share the same `LoggingInterceptor` instance to keep the same logs.
+
+`sendUri` only accepts an absolute `http` / `https` URI with a host
+(`ArgumentError` otherwise). A plain `http` URI is sent without encryption.
 
 ## Interceptors
 
